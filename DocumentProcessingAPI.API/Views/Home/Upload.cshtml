@@ -1,0 +1,125 @@
+@{
+    ViewData["Title"] = "Upload Document";
+}
+
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body p-5">
+                <h2 class="card-title mb-4 text-center">
+                    <i class="bi bi-cloud-upload text-primary"></i> Upload Document
+                </h2>
+
+                @if (TempData["Success"] != null)
+                {
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="bi bi-check-circle"></i> @TempData["Success"]
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                }
+
+                @if (TempData["Error"] != null)
+                {
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <i class="bi bi-exclamation-triangle"></i> @TempData["Error"]
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                }
+
+                <form method="post" enctype="multipart/form-data" id="uploadForm">
+                    <div class="mb-4">
+                        <label for="file" class="form-label fw-bold">
+                            <i class="bi bi-file-earmark-arrow-up"></i> Select Document
+                        </label>
+                        <input type="file"
+                               class="form-control form-control-lg"
+                               id="file"
+                               name="file"
+                               accept=".pdf,.txt,.doc,.docx"
+                               required>
+                        <div class="form-text">
+                            Supported formats: PDF, TXT, DOC, DOCX (Max 100MB)
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="userId" class="form-label fw-bold">
+                            <i class="bi bi-person"></i> User ID (Optional)
+                        </label>
+                        <input type="text"
+                               class="form-control"
+                               id="userId"
+                               name="userId"
+                               placeholder="Enter user ID">
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg" id="uploadBtn">
+                            <i class="bi bi-upload"></i> Upload & Process
+                        </button>
+                    </div>
+
+                    <div id="progressContainer" class="mt-4" style="display: none;">
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                 role="progressbar"
+                                 style="width: 100%">
+                                Processing document...
+                            </div>
+                        </div>
+                        <p class="text-center mt-2 text-muted">
+                            <small>
+                                <i class="bi bi-hourglass-split"></i>
+                                This may take a few minutes for large documents
+                            </small>
+                        </p>
+                    </div>
+                </form>
+
+                <hr class="my-4">
+
+                <div class="text-center">
+                    <h5 class="mb-3">How it works</h5>
+                    <div class="row text-start">
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex align-items-start">
+                                <i class="bi bi-1-circle-fill text-primary fs-4 me-2"></i>
+                                <div>
+                                    <strong>Upload</strong>
+                                    <p class="text-muted small mb-0">Upload your PDF or text document</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex align-items-start">
+                                <i class="bi bi-2-circle-fill text-primary fs-4 me-2"></i>
+                                <div>
+                                    <strong>Process</strong>
+                                    <p class="text-muted small mb-0">AI extracts and chunks the content</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex align-items-start">
+                                <i class="bi bi-3-circle-fill text-primary fs-4 me-2"></i>
+                                <div>
+                                    <strong>Search</strong>
+                                    <p class="text-muted small mb-0">Search semantically across your documents</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', function() {
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('progressContainer').style.display = 'block';
+        });
+    </script>
+}

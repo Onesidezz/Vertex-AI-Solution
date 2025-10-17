@@ -1,0 +1,524 @@
+@{
+    ViewData["Title"] = "Content Manager Search";
+    var searchResults = ViewBag.SearchResults as RecordSearchResponseDto;
+}
+
+<style>
+    * {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+    }
+    body {
+        background-color: #ffffff;
+        font-size: 14px;
+        color: #202124;
+    }
+    
+    /* Remove default container padding */
+    .container-fluid {
+        padding: 0 !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+    }
+    
+    /* Header - Full Width */
+    .cm-header {
+        border-bottom: 1px solid #e8eaed;
+        padding: 14px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #fff;
+    }
+    .cm-logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .cm-logo-icon {
+        width: 28px;
+        height: 28px;
+        background: #1a73e8;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 16px;
+    }
+    .cm-title {
+        font-size: 18px;
+        font-weight: 500;
+        color: #202124;
+    }
+    
+    /* Search Panel - Full Width */
+    .search-panel {
+        padding: 16px 24px;
+        background: #ffffff;
+        border-bottom: 1px solid #e8eaed;
+    }
+    .search-form {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 100%;
+    }
+    .search-box {
+        display: flex;
+        align-items: center;
+        border: 1px solid #dfe1e5;
+        border-radius: 4px;
+        padding: 0 16px;
+        height: 40px;
+        flex: 1;
+        max-width: 600px;
+        transition: border-color 0.2s;
+        background: #ffffff;
+    }
+    .search-box:hover {
+        border-color: #b0b3b8;
+    }
+    .search-box:focus-within {
+        border-color: #1a73e8;
+    }
+    .search-icon {
+        color: #5f6368;
+        font-size: 16px;
+        margin-right: 12px;
+    }
+    .search-input {
+        border: none;
+        outline: none;
+        font-size: 15px;
+        flex: 1;
+        background: transparent;
+        color: #202124;
+    }
+    .search-input::placeholder {
+        color: #5f6368;
+    }
+    .filter-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .filter-label-inline {
+        font-size: 13px;
+        color: #5f6368;
+        white-space: nowrap;
+        font-weight: 500;
+    }
+    .filter-input-inline {
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        padding: 8px 12px;
+        font-size: 14px;
+        width: 70px;
+        outline: none;
+        transition: border-color 0.2s;
+    }
+    .filter-input-inline:focus {
+        border-color: #1a73e8;
+    }
+    .btn-search {
+        background: #1a73e8;
+        border: none;
+        border-radius: 4px;
+        padding: 10px 24px;
+        font-size: 14px;
+        font-weight: 500;
+        color: white;
+        cursor: pointer;
+        transition: background 0.2s, box-shadow 0.2s;
+        white-space: nowrap;
+    }
+    .btn-search:hover {
+        background: #1765cc;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+    
+    /* Results Stats Bar - Full Width */
+    .results-stats {
+        padding: 10px 24px;
+        background: #ffffff;
+        border-bottom: 1px solid #e8eaed;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 13px;
+        color: #70757a;
+    }
+    .results-count {
+        font-weight: 500;
+        color: #202124;
+    }
+
+    /* AI Summary - Full Width */
+    .ai-summary {
+        padding: 12px 24px;
+        background: #ffffff;
+        border-bottom: 1px solid #e8eaed;
+        border-left: 3px solid #1a73e8;
+    }
+    .ai-summary-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #1a73e8;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .ai-summary-text {
+        font-size: 14px;
+        line-height: 1.6;
+        color: #202124;
+    }
+    
+    /* Results Table - Full Width */
+    .results-container {
+        padding: 0;
+        background: #ffffff;
+    }
+    .results-grid {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background: #ffffff;
+    }
+    .results-grid thead {
+        background: #ffffff;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    .results-grid th {
+        text-align: left;
+        padding: 10px 24px;
+        font-weight: 600;
+        color: #5f6368;
+        border-bottom: 1px solid #e8eaed;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        background: #ffffff;
+    }
+    .results-grid tbody tr {
+        border-bottom: 1px solid #e8eaed;
+        transition: background-color 0.08s;
+        background: #ffffff;
+    }
+    .results-grid tbody tr:hover {
+        background-color: #f8f9fa;
+    }
+    .results-grid td {
+        padding: 10px 24px;
+        vertical-align: middle;
+    }
+    .cell-icon {
+        width: 50px;
+        text-align: center;
+        font-size: 18px;
+        padding-left: 24px;
+    }
+    .cell-title {
+        min-width: 300px;
+    }
+    .result-title-text {
+        font-size: 14px;
+        color: #1a73e8;
+        font-weight: 400;
+        display: block;
+        margin-bottom: 4px;
+        cursor: pointer;
+    }
+    .result-title-text:hover {
+        text-decoration: underline;
+    }
+    .result-uri-text {
+        font-size: 12px;
+        color: #5f6368;
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+    }
+    .cell-date {
+        color: #5f6368;
+        white-space: nowrap;
+        font-size: 13px;
+        width: 120px;
+    }
+    .cell-type {
+        width: 140px;
+    }
+    .type-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        background: #f1f3f4;
+        color: #202124;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .type-badge.container {
+        background: #f1f3f4;
+        color: #202124;
+    }
+    .cell-score {
+        text-align: center;
+        width: 90px;
+        padding-right: 24px;
+    }
+    .score-badge {
+        display: inline-block;
+        padding: 5px 10px;
+        background: #e8f5e9;
+        color: #1e8e3e;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 48px;
+        text-align: center;
+    }
+    
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 80px 20px;
+        color: #5f6368;
+    }
+    .empty-state-icon {
+        font-size: 64px;
+        color: #dadce0;
+        margin-bottom: 20px;
+    }
+    .empty-state h5 {
+        font-size: 18px;
+        font-weight: 400;
+        color: #202124;
+        margin: 0 0 8px 0;
+    }
+    .empty-state p {
+        font-size: 14px;
+        color: #5f6368;
+        margin: 0;
+    }
+    
+    /* Highlight */
+    .highlight {
+        background-color: #fff9c4;
+        font-weight: 600;
+        padding: 0 2px;
+        border-radius: 2px;
+    }
+    
+    /* Alert - Full Width */
+    .alert-danger {
+        padding: 12px 24px;
+        background: #fce8e6;
+        border-bottom: 1px solid #f5b7b1;
+        color: #5f0700;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .btn-close {
+        margin-left: auto;
+        background: transparent;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: #5f0700;
+        opacity: 0.6;
+    }
+    .btn-close:hover {
+        opacity: 1;
+    }
+</style>
+
+<!-- Header -->
+<div class="cm-header">
+    <div class="cm-logo">
+        <div class="cm-logo-icon">
+            <i class="bi bi-folder2"></i>
+        </div>
+        <h1 class="cm-title">Content Manager</h1>
+    </div>
+</div>
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert-danger">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <span>@TempData["Error"]</span>
+        <button type="button" class="btn-close" data-bs-dismiss="alert">&times;</button>
+    </div>
+}
+
+<!-- Search Panel -->
+<div class="search-panel">
+    <form method="post" id="searchForm" class="search-form">
+        <div class="search-box">
+            <i class="bi bi-search search-icon"></i>
+            <input type="text"
+                   class="search-input"
+                   id="query"
+                   name="query"
+                   placeholder="Search records, documents, or content..."
+                   value="@ViewBag.Query"
+                   required>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label-inline">Results:</span>
+            <input type="number" class="filter-input-inline" id="topK" name="topK"
+                   min="1" max="100" value="@(ViewBag.TopK ?? 20)">
+        </div>
+        <div class="filter-group">
+            <span class="filter-label-inline">Min Score:</span>
+            <input type="number" class="filter-input-inline" id="minimumScore" name="minimumScore"
+                   step="0.1" min="0" max="1" value="@(ViewBag.MinimumScore ?? 0.3)">
+        </div>
+        <button type="submit" class="btn-search">
+            <i class="bi bi-search"></i> Search
+        </button>
+    </form>
+</div>
+
+@if (searchResults != null)
+{
+    <!-- Results Stats -->
+    <div class="results-stats">
+        <div class="results-count">
+            @searchResults.TotalResults result@(searchResults.TotalResults != 1 ? "s" : "")
+        </div>
+        <div>
+            @searchResults.QueryTime.ToString("F3") seconds
+        </div>
+    </div>
+
+    <!-- AI Summary -->
+    @if (!string.IsNullOrWhiteSpace(searchResults.SynthesizedAnswer))
+    {
+        <div class="ai-summary">
+            <div class="ai-summary-title">
+                <i class="bi bi-stars"></i>
+                AI Generated Summary
+            </div>
+            <div class="ai-summary-text ai-answer-text">
+                @searchResults.SynthesizedAnswer
+            </div>
+        </div>
+    }
+
+    <!-- Results Table -->
+    <div class="results-container">
+        @if (searchResults.Results.Any())
+        {
+            <table class="results-grid">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;"></th>
+                        <th>Title & URI</th>
+                        <th style="width: 120px;">Date Created</th>
+                        <th style="width: 140px;">Type</th>
+                        <th style="width: 90px; text-align: center;">Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var result in searchResults.Results)
+                    {
+                        <tr>
+                            <td class="cell-icon">
+                                @if (result.RecordType == "Container")
+                                {
+                                    <i class="bi bi-folder-fill" style="color: #f9ab00;"></i>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-file-earmark-text" style="color: #1a73e8;"></i>
+                                }
+                            </td>
+                            <td class="cell-title">
+                                <a href="/Download/@result.RecordUri" class="result-title-text" title="Click to download">@result.RecordTitle</a>
+                                <div class="result-uri-text">@result.RecordUri</div>
+                            </td>
+                            <td class="cell-date">
+                                @result.DateCreated
+                            </td>
+                            <td class="cell-type">
+                                <span class="type-badge @(result.RecordType == "Container" ? "container" : "")">
+                                    @result.RecordType
+                                </span>
+                            </td>
+                            <td class="cell-score">
+                                <span class="score-badge">
+                                    @result.RelevanceScore.ToString("P0")
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <div class="empty-state">
+                <div class="empty-state-icon">
+                    <i class="bi bi-inbox"></i>
+                </div>
+                <h5>No results found</h5>
+                <p>Try adjusting your search query or lowering the minimum score</p>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="results-container">
+        <div class="empty-state">
+            <div class="empty-state-icon">
+                <i class="bi bi-search"></i>
+            </div>
+            <h5>Search Content Manager Records</h5>
+            <p>Enter a search query above to find relevant records and documents</p>
+        </div>
+    </div>
+}
+
+@section Scripts {
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const query = '@(ViewBag.Query ?? "")';
+
+            if (query) {
+                const keywords = query
+                    .replace(/\s+(OR|AND|NOT)\s+/gi, ' ')
+                    .split(/[\s,;]+/)
+                    .filter(k => k.length > 2)
+                    .map(k => k.replace(/[?!.]/g, ''));
+
+                const aiAnswer = document.querySelector('.ai-answer-text');
+                if (aiAnswer) {
+                    let answerContent = aiAnswer.textContent;
+
+                    keywords.forEach(keyword => {
+                        const regex = new RegExp(`(${escapeRegex(keyword)})`, 'gi');
+                        answerContent = answerContent.replace(regex, '<span class="highlight">$1</span>');
+                    });
+
+                    aiAnswer.innerHTML = answerContent;
+                }
+            }
+        });
+
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+    </script>
+}

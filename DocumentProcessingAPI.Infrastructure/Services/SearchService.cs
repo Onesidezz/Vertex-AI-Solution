@@ -20,6 +20,7 @@ public class SearchService : ISearchService
     private readonly DocumentProcessingDbContext _context;
     private readonly IEmbeddingService _embeddingService;
     private readonly ILocalEmbeddingStorageService _embeddingStorageService;
+    private readonly QdrantVectorService _qdrantService;
     private readonly ILogger<SearchService> _logger;
     private readonly IConfiguration _configuration;
 
@@ -27,12 +28,14 @@ public class SearchService : ISearchService
         DocumentProcessingDbContext context,
         IEmbeddingService embeddingService,
         ILocalEmbeddingStorageService embeddingStorageService,
+        QdrantVectorService qdrantService,
         ILogger<SearchService> logger,
         IConfiguration configuration)
     {
         _context = context;
         _embeddingService = embeddingService;
         _embeddingStorageService = embeddingStorageService;
+        _qdrantService = qdrantService;
         _logger = logger;
         _configuration = configuration;
     }
@@ -52,18 +55,22 @@ public class SearchService : ISearchService
             // Generate embedding for enhanced query
             var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(enhancedQuery);
 
-            // Search similar embeddings from local storage with higher TopK for re-ranking
+            // Search similar embeddings from Qdrant with higher TopK for re-ranking
             var expandedTopK = Math.Min(request.TopK * 3, 100); // Get more results for hybrid scoring
-            var similarResults = await _embeddingStorageService.SearchSimilarAsync(
+            _logger.LogInformation("🔍 Searching Qdrant for top {TopK} results", expandedTopK);
+
+            var similarResults = await _qdrantService.SearchSimilarAsync(
                 queryEmbedding, expandedTopK, Math.Max(request.MinimumScore - 0.1f, 0.0f));
 
-            // Convert to compatible format
+            // Convert Qdrant results to compatible format
             var filteredResults = similarResults.Select(r => new VectorSearchResult
             {
                 Id = r.id,
                 Score = r.similarity,
                 Metadata = r.metadata
             }).ToList();
+
+            _logger.LogInformation("✅ Qdrant returned {Count} results", filteredResults.Count);
 
             // Get chunk IDs from vector results
             var chunkIds = filteredResults
@@ -205,8 +212,10 @@ public class SearchService : ISearchService
             // Generate embedding for query
             var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(request.Query);
 
-            // Search similar embeddings from local storage for specific document
-            var similarResults = await _embeddingStorageService.SearchSimilarAsync(
+            // Search similar embeddings from Qdrant for specific document
+            _logger.LogInformation("🔍 Searching Qdrant for document {DocumentId}", documentId);
+
+            var similarResults = await _qdrantService.SearchSimilarAsync(
                 queryEmbedding, request.TopK, request.MinimumScore, documentId.ToString());
 
             // Convert to compatible format
@@ -323,8 +332,8 @@ public class SearchService : ISearchService
                 return new List<SearchResultDto>();
             }
 
-            // Get the embedding for the reference chunk
-            var referenceEmbeddingData = await _embeddingStorageService.GetEmbeddingAsync(referenceChunk.EmbeddingId);
+            // Get the embedding for the reference chunk from Qdrant
+            var referenceEmbeddingData = await _qdrantService.GetEmbeddingAsync(referenceChunk.EmbeddingId);
             if (referenceEmbeddingData == null)
             {
                 _logger.LogWarning("Reference embedding not found for chunk: {ChunkId}", chunkId);
@@ -332,7 +341,7 @@ public class SearchService : ISearchService
             }
 
             // Search for similar embeddings (excluding the reference itself)
-            var similarEmbeddings = await _embeddingStorageService.SearchSimilarAsync(
+            var similarEmbeddings = await _qdrantService.SearchSimilarAsync(
                 referenceEmbeddingData.Value.embedding, topK + 1); // +1 to account for self-match
 
             // Remove self-match and convert to compatible format
@@ -346,6 +355,8 @@ public class SearchService : ISearchService
                     Metadata = r.metadata
                 })
                 .ToList();
+
+            _logger.LogInformation("✅ Found {Count} similar chunks in Qdrant", similarResults.Count);
 
             var documentIds = similarResults
                 .Select(r => Guid.Parse(r.Metadata["document_id"].ToString()!))

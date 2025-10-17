@@ -18,6 +18,7 @@ public class DocumentService : IDocumentService
     private readonly ITextChunkingService _textChunkingService;
     private readonly IEmbeddingService _embeddingService;
     private readonly ILocalEmbeddingStorageService _embeddingStorageService;
+    private readonly QdrantVectorService _qdrantService;
     private readonly ILogger<DocumentService> _logger;
 
     public DocumentService(
@@ -27,6 +28,7 @@ public class DocumentService : IDocumentService
         ITextChunkingService textChunkingService,
         IEmbeddingService embeddingService,
         ILocalEmbeddingStorageService embeddingStorageService,
+        QdrantVectorService qdrantService,
         ILogger<DocumentService> logger)
     {
         _context = context;
@@ -35,6 +37,7 @@ public class DocumentService : IDocumentService
         _textChunkingService = textChunkingService;
         _embeddingService = embeddingService;
         _embeddingStorageService = embeddingStorageService;
+        _qdrantService = qdrantService;
         _logger = logger;
     }
 
@@ -179,7 +182,10 @@ public class DocumentService : IDocumentService
             if (document == null)
                 return false;
 
-            // Delete embeddings from local storage
+            // Delete embeddings from Qdrant
+            await _qdrantService.DeleteEmbeddingsByDocumentAsync(documentId);
+
+            // Also delete from local storage (backward compatibility)
             await _embeddingStorageService.DeleteEmbeddingsByDocumentAsync(documentId);
 
             // Delete file from storage
@@ -280,7 +286,7 @@ public class DocumentService : IDocumentService
                     TokenCount = textChunk.TokenCount,
                     StartPosition = textChunk.StartPosition,
                     EndPosition = textChunk.EndPosition,
-                    EmbeddingId = $"{document.Id}_{textChunk.Sequence}",
+                    EmbeddingId = Guid.NewGuid().ToString(),
                     CreatedAt = DateTime.UtcNow
                 };
 
@@ -316,8 +322,12 @@ public class DocumentService : IDocumentService
             // Save chunks to database
             _context.DocumentChunks.AddRange(documentChunks);
 
-            // Store embeddings in local storage
-            _logger.LogInformation("Saving {Count} embeddings to local storage", vectorData.Count);
+            // Store embeddings in Qdrant (primary storage)
+            _logger.LogInformation("💾 Saving {Count} embeddings to Qdrant vector database", vectorData.Count);
+            await _qdrantService.SaveEmbeddingsBatchAsync(vectorData);
+
+            // Also store in local storage (backward compatibility - optional)
+            _logger.LogInformation("💾 Saving {Count} embeddings to local storage (backup)", vectorData.Count);
             await _embeddingStorageService.SaveEmbeddingsBatchAsync(vectorData);
 
             // Update document status

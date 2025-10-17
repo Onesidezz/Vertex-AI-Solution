@@ -16,6 +16,8 @@
     <PackageReference Include="AspNetCoreRateLimit" Version="5.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.HealthChecks" Version="2.2.0" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="8.0.0" />
+    <PackageReference Include="Quartz" Version="3.8.0" />
+    <PackageReference Include="Quartz.Extensions.Hosting" Version="3.8.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +27,12 @@
 
   <ItemGroup>
     <Folder Include="uploads\2025\09\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="TRIM.SDK">
+      <HintPath>..\..\..\..\..\..\Program Files\Micro Focus\Content Manager\TRIM.SDK.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

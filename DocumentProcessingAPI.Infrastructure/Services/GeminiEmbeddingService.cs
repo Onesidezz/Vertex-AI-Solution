@@ -1,10 +1,8 @@
 ﻿using DocumentProcessingAPI.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace DocumentProcessingAPI.Infrastructure.Services;
 
