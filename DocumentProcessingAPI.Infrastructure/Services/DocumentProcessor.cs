@@ -1297,15 +1297,15 @@ public class DocumentProcessor : IDocumentProcessor
             {
                 var prompt = $@"The following text has been corrupted by OCR (Optical Character Recognition) errors. Please correct it by:
 
-1. Fixing obvious character substitutions (1→l, 0→O, 5→S, rn→m, etc.)
-2. Reconstructing broken words
-3. Adding proper spacing between words
-4. Maintaining the original meaning and structure
-5. Keeping technical terms, file paths, and configuration details accurate
+                                1. Fixing obvious character substitutions (1→l, 0→O, 5→S, rn→m, etc.)
+                                2. Reconstructing broken words
+                                3. Adding proper spacing between words
+                                4. Maintaining the original meaning and structure
+                                5. Keeping technical terms, file paths, and configuration details accurate
 
-Only return the corrected text, no explanations:
+                                Only return the corrected text, no explanations:
 
-{chunk}";
+                                {chunk}";
 
                 var correctedChunk = await CallGeminiForTextCorrection(prompt);
                 if (!string.IsNullOrWhiteSpace(correctedChunk))

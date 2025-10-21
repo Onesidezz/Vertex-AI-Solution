@@ -79,6 +79,13 @@ public class QdrantVectorService : IDisposable
                     schemaType: PayloadSchemaType.Integer
                 );
 
+                // Create index for record_uri (Content Manager records)
+                await _client.CreatePayloadIndexAsync(
+                    collectionName: _collectionName,
+                    fieldName: "record_uri",
+                    schemaType: PayloadSchemaType.Integer
+                );
+
                 _logger.LogInformation("✅ Qdrant collection '{CollectionName}' created successfully with payload indexes",
                     _collectionName);
             }
@@ -300,8 +307,90 @@ public class QdrantVectorService : IDisposable
     }
 
     /// <summary>
+    /// Ensure record_uri index exists (for existing collections)
+    /// Call this once to add the index if collection was created before this update
+    /// </summary>
+    public async Task<bool> EnsureRecordUriIndexAsync()
+    {
+        try
+        {
+            _logger.LogInformation("🔧 Ensuring record_uri index exists in collection {CollectionName}", _collectionName);
+
+            await _client.CreatePayloadIndexAsync(
+                collectionName: _collectionName,
+                fieldName: "record_uri",
+                schemaType: PayloadSchemaType.Integer
+            );
+
+            _logger.LogInformation("✅ Created record_uri index successfully");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Index might already exist, which is fine
+            if (ex.Message.Contains("already exists") || ex.Message.Contains("conflict"))
+            {
+                _logger.LogInformation("✅ record_uri index already exists");
+                return true;
+            }
+
+            _logger.LogError(ex, "❌ Failed to create record_uri index");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Get count of embeddings for a specific record URI
+    /// Uses scroll API to efficiently find all chunks for a record
+    /// </summary>
+    public async Task<List<PointId>> GetPointIdsByRecordUriAsync(long recordUri)
+    {
+        try
+        {
+            _logger.LogDebug("🔍 Finding all point IDs for record URI {RecordUri}", recordUri);
+
+            var pointIds = new List<PointId>();
+
+            // Use scroll API to find all points matching the record_uri filter
+            var scrollResult = await _client.ScrollAsync(
+                collectionName: _collectionName,
+                filter: new Filter
+                {
+                    Must =
+                    {
+                        new Condition
+                        {
+                            Field = new FieldCondition
+                            {
+                                Key = "record_uri",
+                                Match = new Match { Integer = recordUri }
+                            }
+                        }
+                    }
+                },
+                limit: 1000 // Get up to 1000 chunks per scroll (should be enough for any record)
+            );
+
+            // Extract point IDs from scroll response
+            if (scrollResult.Result != null)
+            {
+                pointIds.AddRange(scrollResult.Result.Select(p => p.Id));
+            }
+
+            _logger.LogDebug("✅ Found {Count} point IDs for record URI {RecordUri}", pointIds.Count, recordUri);
+            return pointIds;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get point IDs for record URI {RecordUri}", recordUri);
+            return new List<PointId>();
+        }
+    }
+
+    /// <summary>
     /// Delete all embeddings for a specific Content Manager record URI using metadata filter
     /// More efficient than individual deletions when dealing with many chunks
+    /// Now with automatic index creation fallback
     /// </summary>
     public async Task<bool> DeleteEmbeddingsByRecordUriAsync(long recordUri)
     {
@@ -333,6 +422,51 @@ public class QdrantVectorService : IDisposable
         }
         catch (Exception ex)
         {
+            // Check if error is due to missing index
+            if (ex.Message.Contains("Index required") || ex.Message.Contains("not found for \"record_uri\""))
+            {
+                _logger.LogWarning("⚠️ record_uri index missing, creating it now...");
+
+                // Try to create the index
+                var indexCreated = await EnsureRecordUriIndexAsync();
+
+                if (indexCreated)
+                {
+                    _logger.LogInformation("✅ Index created, retrying deletion...");
+
+                    // Retry deletion after creating index
+                    try
+                    {
+                        await _client.DeleteAsync(
+                            collectionName: _collectionName,
+                            filter: new Filter
+                            {
+                                Must =
+                                {
+                                    new Condition
+                                    {
+                                        Field = new FieldCondition
+                                        {
+                                            Key = "record_uri",
+                                            Match = new Match { Integer = recordUri }
+                                        }
+                                    }
+                                }
+                            },
+                            wait: true
+                        );
+
+                        _logger.LogInformation("✅ Deleted all embeddings for record URI {RecordUri} after index creation", recordUri);
+                        return true;
+                    }
+                    catch (Exception retryEx)
+                    {
+                        _logger.LogError(retryEx, "❌ Failed to delete after creating index");
+                        return false;
+                    }
+                }
+            }
+
             _logger.LogError(ex, "❌ Failed to delete embeddings for record URI {RecordUri} from Qdrant", recordUri);
             return false;
         }

@@ -2,8 +2,6 @@ using DocumentProcessingAPI.Core.DTOs;
 using DocumentProcessingAPI.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -173,6 +171,30 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 }
 
                 // ============================================================
+                // STEP 1.5: KEYWORD EXTRACTION WITH GEMINI
+                // ============================================================
+                _logger.LogInformation("🔍 STEP 1.5: Extracting Keywords with Gemini");
+
+                List<string> extractedKeywords = new List<string>();
+                try
+                {
+                    extractedKeywords = await ExtractKeywordsWithGemini(cleanQuery);
+                    if (extractedKeywords.Any())
+                    {
+                        _logger.LogInformation("   ✅ Extracted keywords: {Keywords}",
+                            string.Join(", ", extractedKeywords));
+                    }
+                    else
+                    {
+                        _logger.LogInformation("   ℹ️ No specific keywords extracted - will use semantic search");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "   ⚠️ Keyword extraction failed, continuing without keywords");
+                }
+
+                // ============================================================
                 // STEP 2: CONTENT MANAGER IDOL INDEX SEARCH (Fast Pre-filter)
                 // ============================================================
                 _logger.LogInformation("🔍 STEP 2: Content Manager IDOL Index Search");
@@ -180,8 +202,16 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 HashSet<long> candidateRecordUris = null;
                 List<string> recordDetails = null;
 
-                // Prepare content query for CM search (remove stop words)
-                var contentQuery = RemoveCommonQueryWords(cleanQuery);
+                // Prepare content query for CM search
+                // Use extracted keywords if available, otherwise fall back to removing stop words
+                var contentQuery = extractedKeywords.Any()
+                    ? string.Join(" ", extractedKeywords)
+                    : RemoveCommonQueryWords(cleanQuery);
+
+                _logger.LogInformation("   📋 Content query for CM Index: {ContentQuery}", contentQuery);
+
+                // Store the keyword list for later use (preserving multi-word phrases)
+                var keywordList = extractedKeywords.Any() ? extractedKeywords : new List<string>();
 
                 // Check if we should use CM Index search
                 // Use it if we have dates, content, or file type filters
@@ -200,7 +230,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                             contentQuery,
                             startDate,
                             endDate,
-                            fileTypeFilters);
+                            fileTypeFilters,
+                            keywordList);
 
                         _logger.LogInformation("   ✅ CM Index returned {Count} candidate records with details",
                             candidateRecordUris?.Count ?? 0);
@@ -246,17 +277,17 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("   📊 Search Parameters: Limit={SearchLimit}, MinScore={AdjustedMinScore}",
                     searchLimit, adjustedMinScore);
 
-                // If we have record details from CM Index, append them to enhance the query
-                // This enriches the query with record metadata for better semantic matching
+                // If we have URIs from CM Index, append them to enhance the query
+                // URIs provide lightweight hints - chunks have record_uri in metadata during embedding
                 var enhancedQuery = cleanQuery;
                 if (recordDetails != null && recordDetails.Count > 0)
                 {
-                    // Append all record details to the query
+                    // Append URIs only (not full record details) to keep query lightweight
                     enhancedQuery = $"{cleanQuery} {string.Join(" ", recordDetails)}";
-                    _logger.LogInformation("   ✅ Enhanced query with {Count} record details from CM Index",
+                    _logger.LogInformation("   ✅ Enhanced query with {Count} URIs from CM Index",
                         recordDetails.Count);
-                    _logger.LogDebug("   Enhanced query preview: {Preview}...",
-                        enhancedQuery.Length > 200 ? enhancedQuery.Substring(0, 200) : enhancedQuery);
+                    _logger.LogDebug("   Enhanced query: {Query}",
+                        enhancedQuery.Length > 300 ? enhancedQuery.Substring(0, 300) + "..." : enhancedQuery);
                 }
 
                 // Generate embedding for the query (with record details if available)
@@ -1632,7 +1663,163 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
             return (isEarliest, isLatest);
         }
-        
+
+        /// <summary>
+        /// Extract main search keywords from natural language queries using Gemini
+        /// Returns entity names, product names, topics while excluding date/time and file type terms
+        /// </summary>
+        private async Task<List<string>> ExtractKeywordsWithGemini(string query)
+        {
+            try
+            {
+                _logger.LogDebug("   🔍 Extracting keywords from query using Gemini");
+
+                // Build prompt for keyword extraction
+                var prompt = @$"You are a search query analyzer. Extract the core search terms from the user's query that should be used to find matching documents in an index.
+
+                                QUERY: ""{query}""
+
+                                TASK:
+                                Extract ONLY the meaningful content keywords - the specific things the user wants to find.
+
+                                WHAT TO EXTRACT:
+                                - Names (people, companies, products, projects)
+                                - Topics and subjects
+                                - Specific terms and phrases
+                                - Technical terms
+                                - Concepts and themes
+                                - Numbers WITH context (e.g., ""17 years"", ""5+ years experience"", ""10 years"", ""2 years"")
+                                - Any word or phrase that identifies WHAT document content to search for
+
+                                WHAT TO EXCLUDE (handled elsewhere):
+                                - Calendar dates: month names (January, February, etc.), specific dates (""October 2025"", ""2025-10-14"")
+                                - Time references: times (""3:40 PM""), temporal words (""today"", ""yesterday"", ""recent"", ""latest"")
+                                - File type words: PDF, Excel, Word, PowerPoint, document, file
+                                - Action words: find, show, get, search, display, list
+                                - Generic words: documents, records, files, items, data
+                                - Prepositions ALONE: about, from, in, on, at, to (but keep if part of meaningful phrase)
+
+                                IMPORTANT - NUMBERS WITH CONTEXT:
+                                - DO extract: ""17 years"", ""5+ years"", ""10 years experience"", ""2 years"" (these describe content attributes)
+                                - DO NOT extract: standalone years like ""2025"", ""2024"" (these are calendar dates)
+
+                                RULES:
+                                1. If the query is ONLY about dates/times/file types (no content to search), return empty array []
+                                2. Keep multi-word phrases together, especially numbers with context words like ""years"", ""experience""
+                                3. Return as JSON array of strings
+                                4. No explanations, ONLY return the JSON array
+
+                                EXAMPLES:
+
+                                Input: ""Find documents about WEAI""
+                                Output: [""WEAI""]
+
+                                Input: ""Show me ServiceAPI documentation""
+                                Output: [""ServiceAPI"", ""documentation""]
+
+                                Input: ""Get me resumes of candidates with 17 years and 1 years of experience""
+                                Output: [""resumes"", ""candidates"", ""17 years"", ""1 years"", ""experience""]
+
+                                Input: ""candidates with 5+ years of experience in Python""
+                                Output: [""candidates"", ""5+ years"", ""experience"", ""Python""]
+
+                                Input: ""Show me documents from October 2025""
+                                Output: []
+
+                                Input: ""Find all PDF documents""
+                                Output: []
+
+                                Input: ""financial reports for Q3""
+                                Output: [""financial reports"", ""Q3""]
+
+                                Now extract keywords from the QUERY above. Return ONLY the JSON array:";
+
+                // Call Gemini API
+                var response = await CallGeminiModelAsync(prompt);
+
+                if (string.IsNullOrWhiteSpace(response))
+                {
+                    _logger.LogWarning("   ⚠️ Empty response from Gemini keyword extraction");
+                    return new List<string>();
+                }
+
+                // Parse JSON response
+                var keywords = ParseKeywordsFromGeminiResponse(response);
+
+                if (keywords.Any())
+                {
+                    _logger.LogDebug("   ✅ Extracted {Count} keyword(s): {Keywords}",
+                        keywords.Count, string.Join(", ", keywords));
+                }
+                else
+                {
+                    _logger.LogDebug("   ℹ️ No keywords extracted (query may be date/time/file-type only)");
+                }
+
+                return keywords;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "   ⚠️ Failed to extract keywords with Gemini: {Message}", ex.Message);
+                return new List<string>();
+            }
+        }
+
+        /// <summary>
+        /// Parse keywords from Gemini JSON response
+        /// Expected format: ["keyword1", "keyword2"] or [] for empty
+        /// </summary>
+        private List<string> ParseKeywordsFromGeminiResponse(string response)
+        {
+            try
+            {
+                // Clean up response - remove markdown code blocks if present
+                response = response.Trim();
+                if (response.StartsWith("```json"))
+                {
+                    response = response.Substring(7);
+                }
+                if (response.StartsWith("```"))
+                {
+                    response = response.Substring(3);
+                }
+                if (response.EndsWith("```"))
+                {
+                    response = response.Substring(0, response.Length - 3);
+                }
+                response = response.Trim();
+
+                // Parse JSON array
+                var jsonDoc = JsonSerializer.Deserialize<JsonElement>(response);
+
+                if (jsonDoc.ValueKind != JsonValueKind.Array)
+                {
+                    _logger.LogWarning("   ⚠️ Gemini response is not a JSON array: {Response}", response);
+                    return new List<string>();
+                }
+
+                var keywords = new List<string>();
+                foreach (var element in jsonDoc.EnumerateArray())
+                {
+                    if (element.ValueKind == JsonValueKind.String)
+                    {
+                        var keyword = element.GetString();
+                        if (!string.IsNullOrWhiteSpace(keyword))
+                        {
+                            keywords.Add(keyword.Trim());
+                        }
+                    }
+                }
+
+                return keywords;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse keywords from Gemini response: {Response}", response);
+                return new List<string>();
+            }
+        }
+
         /// <summary>
         /// Apply date range filter to results by comparing date_created field
         /// Supports filtering by start date, end date, or both (including time)
@@ -2244,7 +2431,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             string contentQuery,
             DateTime? startDate,
             DateTime? endDate,
-            List<string> fileTypeFilters)
+            List<string> fileTypeFilters,
+            List<string> keywordPhrases = null)
         {
             try
             {
@@ -2304,13 +2492,39 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         _logger.LogInformation("   📋 Using end date filter: {DateFilter}", dateStr);
                     }
                 }
-                // Step 2: If no date but we have content, use content filter
+                // Step 2: If no date but we have content, search for each keyword/phrase separately
                 else if (!string.IsNullOrWhiteSpace(contentQuery))
                 {
-                    // Content must be wrapped in quotes: content:"value"
-                    var contentStr = $"content:\"{contentQuery}\"";
-                    search.SetSearchString(contentStr);
-                    _logger.LogInformation("   📋 Using content filter: {ContentFilter}", contentStr);
+                    // Use keyword phrases from Gemini if available (preserves multi-word phrases like "17 years")
+                    // Otherwise split content query into individual keywords
+                    var keywords = (keywordPhrases != null && keywordPhrases.Any())
+                        ? keywordPhrases.Where(k => !string.IsNullOrWhiteSpace(k)).ToList()
+                        : contentQuery.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                      .Where(k => k.Length > 2) // Skip very short words
+                                      .ToList();
+
+                    if (keywords.Count == 1)
+                    {
+                        // Single keyword/phrase - simple search
+                        var contentStr = $"content:\"{keywords[0]}\"";
+                        search.SetSearchString(contentStr);
+                        _logger.LogInformation("   📋 Using content filter: {ContentFilter}", contentStr);
+                    }
+                    else if (keywords.Count > 1)
+                    {
+                        // Multiple keywords/phrases - combine with OR to find documents containing ANY keyword
+                        var orConditions = keywords.Select(k => $"content:\"{k}\"").ToList();
+                        var combinedQuery = string.Join(" or ", orConditions);
+                        search.SetSearchString(combinedQuery);
+                        _logger.LogInformation("   📋 Using multi-keyword OR filter: {ContentFilter}", combinedQuery);
+                        _logger.LogInformation("   📋 Searching for documents containing ANY of: {Keywords}", string.Join(", ", keywords));
+                    }
+                    else
+                    {
+                        // No valid keywords after filtering
+                        _logger.LogInformation("   ℹ️ No valid keywords found in content query");
+                        search.SetSearchString("number:*");
+                    }
                 }
                 // Step 3: If no date or content but have file type, use file type filter
                 else if (fileTypeFilters != null && fileTypeFilters.Any())
@@ -2343,9 +2557,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         var uri = record.Uri.Value;
                         candidateUris.Add(uri);
 
-                        // Build record information string (matching the embedding format)
-                        var recordInfo = $"[Record: {record.Title} | URI: {uri} | Created: {record.DateCreated}]";
-                        recordDetails.Add(recordInfo);
+                        // Add only URI for lightweight query enhancement
+                        // During embedding, chunks have record_uri metadata, so this provides a hint
+                        recordDetails.Add($"URI:{uri}");
 
                         recordCount++;
 
@@ -2361,7 +2575,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         // If fetch fails, just add the URI
                         if (candidateUris.Contains(record.Uri.Value))
                         {
-                            recordDetails.Add($"URI: {record.Uri.Value}");
+                            recordDetails.Add($"URI:{record.Uri.Value}");
                         }
                     }
                 }

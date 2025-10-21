@@ -148,6 +148,116 @@ namespace DocumentProcessingAPI.API.Controllers
                 });
             }
         }
+
+        /// <summary>
+        /// Delete all embeddings (chunks) for multiple Content Manager record URIs (batch deletion)
+        /// This removes all vector data associated with the records from the vector database
+        /// </summary>
+        /// <param name="request">Batch deletion request containing list of record URIs</param>
+        /// <returns>Batch deletion results with details for each record</returns>
+        [HttpPost("records/delete-batch")]
+        public async Task<ActionResult<DeleteMultipleRecordsResponseDto>> DeleteMultipleRecordEmbeddings([FromBody] DeleteMultipleRecordsRequestDto request)
+        {
+            try
+            {
+                _logger.LogInformation("API: Batch deleting embeddings for {Count} record URIs", request.RecordUris?.Count ?? 0);
+
+                if (request.RecordUris == null || !request.RecordUris.Any())
+                {
+                    return BadRequest(new DeleteMultipleRecordsResponseDto
+                    {
+                        Success = false,
+                        TotalRequested = 0,
+                        TotalDeleted = 0,
+                        TotalNotFound = 0,
+                        TotalFailed = 0,
+                        Results = new List<DeleteRecordResultDto>(),
+                        Message = "No record URIs provided for deletion"
+                    });
+                }
+
+                var results = await _recordEmbeddingService.DeleteMultipleRecordEmbeddingsAsync(request.RecordUris);
+
+                // Process results into detailed response
+                var deletionResults = new List<DeleteRecordResultDto>();
+                int totalDeleted = 0;
+                int totalNotFound = 0;
+                int totalFailed = 0;
+
+                foreach (var kvp in results)
+                {
+                    var recordUri = kvp.Key;
+                    var deletedChunks = kvp.Value;
+
+                    if (deletedChunks > 0)
+                    {
+                        totalDeleted++;
+                        deletionResults.Add(new DeleteRecordResultDto
+                        {
+                            RecordUri = recordUri,
+                            DeletedChunks = deletedChunks,
+                            Success = true,
+                            Message = $"Successfully deleted {deletedChunks} chunks"
+                        });
+                    }
+                    else
+                    {
+                        totalNotFound++;
+                        deletionResults.Add(new DeleteRecordResultDto
+                        {
+                            RecordUri = recordUri,
+                            DeletedChunks = 0,
+                            Success = false,
+                            Message = "No embeddings found for this record"
+                        });
+                    }
+                }
+
+                // Check for any URIs that weren't in the results (failed)
+                foreach (var uri in request.RecordUris)
+                {
+                    if (!results.ContainsKey(uri))
+                    {
+                        totalFailed++;
+                        deletionResults.Add(new DeleteRecordResultDto
+                        {
+                            RecordUri = uri,
+                            DeletedChunks = 0,
+                            Success = false,
+                            Message = "Failed to process deletion"
+                        });
+                    }
+                }
+
+                var totalChunks = results.Values.Sum();
+
+                return Ok(new DeleteMultipleRecordsResponseDto
+                {
+                    Success = totalDeleted > 0,
+                    TotalRequested = request.RecordUris.Count,
+                    TotalDeleted = totalDeleted,
+                    TotalNotFound = totalNotFound,
+                    TotalFailed = totalFailed,
+                    TotalChunksDeleted = totalChunks,
+                    Results = deletionResults,
+                    Message = $"Batch deletion complete: {totalDeleted} records deleted ({totalChunks} chunks), {totalNotFound} not found, {totalFailed} failed"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "API: Failed to process batch deletion");
+                return StatusCode(500, new DeleteMultipleRecordsResponseDto
+                {
+                    Success = false,
+                    TotalRequested = request.RecordUris?.Count ?? 0,
+                    TotalDeleted = 0,
+                    TotalNotFound = 0,
+                    TotalFailed = request.RecordUris?.Count ?? 0,
+                    Results = new List<DeleteRecordResultDto>(),
+                    Message = $"Error processing batch deletion: {ex.Message}"
+                });
+            }
+        }
     }
 
     /// <summary>
@@ -168,6 +278,40 @@ namespace DocumentProcessingAPI.API.Controllers
         public bool Success { get; set; }
         public long RecordUri { get; set; }
         public int DeletedChunks { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Request DTO for batch deletion of multiple records
+    /// </summary>
+    public class DeleteMultipleRecordsRequestDto
+    {
+        public List<long> RecordUris { get; set; } = new List<long>();
+    }
+
+    /// <summary>
+    /// Response DTO for batch deletion operations
+    /// </summary>
+    public class DeleteMultipleRecordsResponseDto
+    {
+        public bool Success { get; set; }
+        public int TotalRequested { get; set; }
+        public int TotalDeleted { get; set; }
+        public int TotalNotFound { get; set; }
+        public int TotalFailed { get; set; }
+        public int TotalChunksDeleted { get; set; }
+        public List<DeleteRecordResultDto> Results { get; set; } = new List<DeleteRecordResultDto>();
+        public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Individual record deletion result within batch operation
+    /// </summary>
+    public class DeleteRecordResultDto
+    {
+        public long RecordUri { get; set; }
+        public int DeletedChunks { get; set; }
+        public bool Success { get; set; }
         public string Message { get; set; } = string.Empty;
     }
 }

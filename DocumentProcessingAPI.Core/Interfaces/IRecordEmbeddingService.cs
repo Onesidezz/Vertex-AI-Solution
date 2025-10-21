@@ -16,5 +16,12 @@ namespace DocumentProcessingAPI.Core.Interfaces
         /// <param name="recordUri">The Content Manager record URI to delete</param>
         /// <returns>Number of chunks deleted</returns>
         Task<int> DeleteRecordEmbeddingsAsync(long recordUri);
+
+        /// <summary>
+        /// Delete all embeddings (chunks) for multiple record URIs from Vector DB (batch deletion)
+        /// </summary>
+        /// <param name="recordUris">List of Content Manager record URIs to delete</param>
+        /// <returns>Dictionary mapping each URI to the number of chunks deleted</returns>
+        Task<Dictionary<long, int>> DeleteMultipleRecordEmbeddingsAsync(List<long> recordUris);
     }
 }

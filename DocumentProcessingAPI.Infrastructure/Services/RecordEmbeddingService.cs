@@ -687,6 +687,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         /// <summary>
         /// Delete all embeddings (chunks) for a specific record URI from Vector DB
         /// This removes both metadata and document content embeddings for the record
+        /// OPTIMIZED: Uses Qdrant scroll API to find actual chunks instead of checking 0-99 sequentially
         /// </summary>
         /// <param name="recordUri">The Content Manager record URI to delete</param>
         /// <returns>Number of chunks deleted</returns>
@@ -699,56 +700,33 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var startTime = DateTime.Now;
                 int deletedCount = 0;
 
-                // First, count existing embeddings to provide accurate statistics
-                var embeddingIdsFound = new List<string>();
+                // OPTIMIZED: Use Qdrant scroll API to find actual point IDs (fast, direct query)
+                // This replaces the slow sequential check of chunks 0-99
+                var pointIds = await _qdrantService.GetPointIdsByRecordUriAsync(recordUri);
 
-                // Check for embeddings (cm_record_{URI}_chunk_0, cm_record_{URI}_chunk_1, etc.)
-                for (int i = 0; i < 100; i++) // Check up to 100 chunks (should be more than enough)
-                {
-                    var embeddingId = $"{RECORD_COLLECTION_PREFIX}{recordUri}_chunk_{i}";
-                    var existing = await _qdrantService.GetEmbeddingAsync(embeddingId);
-                    if (existing != null)
-                    {
-                        embeddingIdsFound.Add(embeddingId);
-                        _logger.LogDebug("Found embedding: {EmbeddingId}", embeddingId);
-                    }
-                }
-
-                if (!embeddingIdsFound.Any())
+                if (!pointIds.Any())
                 {
                     _logger.LogWarning("⚠️ No embeddings found for record URI: {RecordUri}", recordUri);
                     return 0;
                 }
 
-                _logger.LogInformation("📋 Found {Count} embeddings to delete for record URI: {RecordUri}", 
-                    embeddingIdsFound.Count, recordUri);
+                _logger.LogInformation("📋 Found {Count} embeddings to delete for record URI: {RecordUri}",
+                    pointIds.Count, recordUri);
 
                 // Use efficient filter-based deletion from QdrantVectorService
+                // This method now auto-creates the index if missing and retries
                 var success = await _qdrantService.DeleteEmbeddingsByRecordUriAsync(recordUri);
-                
+
                 if (success)
                 {
-                    deletedCount = embeddingIdsFound.Count; // All found embeddings should be deleted
+                    deletedCount = pointIds.Count; // All found embeddings should be deleted
                     _logger.LogInformation("✅ Successfully deleted all embeddings using filter-based deletion");
                 }
                 else
                 {
-                    _logger.LogWarning("⚠️ Filter-based deletion failed, falling back to individual deletion");
-                    
-                    // Fallback: Delete embeddings individually
-                    foreach (var embeddingId in embeddingIdsFound)
-                    {
-                        var individualSuccess = await _qdrantService.DeleteEmbeddingAsync(embeddingId);
-                        if (individualSuccess)
-                        {
-                            deletedCount++;
-                            _logger.LogDebug("✅ Deleted embedding: {EmbeddingId}", embeddingId);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("⚠️ Failed to delete embedding: {EmbeddingId}", embeddingId);
-                        }
-                    }
+                    _logger.LogWarning("⚠️ Filter-based deletion failed, deletion unsuccessful");
+                    // Note: Individual deletion fallback removed as filter-based deletion
+                    // should work after auto-creating index
                 }
 
                 var endTime = DateTime.Now;
@@ -759,9 +737,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("📊 DELETION STATISTICS:");
                 _logger.LogInformation("  • Record URI: {RecordUri}", recordUri);
-                _logger.LogInformation("  • Embeddings Found: {Found}", embeddingIdsFound.Count);
+                _logger.LogInformation("  • Embeddings Found: {Found}", pointIds.Count);
                 _logger.LogInformation("  • Embeddings Deleted: {Deleted}", deletedCount);
-                _logger.LogInformation("  • Failed Deletions: {Failed}", embeddingIdsFound.Count - deletedCount);
+                _logger.LogInformation("  • Failed Deletions: {Failed}", pointIds.Count - deletedCount);
                 _logger.LogInformation("⏱️ TIME TAKEN:");
                 _logger.LogInformation("  • Start: {StartTime}", startTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 _logger.LogInformation("  • End: {EndTime}", endTime.ToString("yyyy-MM-dd HH:mm:ss"));
@@ -773,6 +751,115 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Failed to delete embeddings for record URI: {RecordUri}", recordUri);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Delete all embeddings (chunks) for multiple record URIs from Vector DB (batch deletion)
+        /// This removes both metadata and document content embeddings for all specified records
+        /// </summary>
+        /// <param name="recordUris">List of Content Manager record URIs to delete</param>
+        /// <returns>Dictionary mapping each URI to the number of chunks deleted</returns>
+        public async Task<Dictionary<long, int>> DeleteMultipleRecordEmbeddingsAsync(List<long> recordUris)
+        {
+            try
+            {
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("🗑️ STARTING BATCH DELETION PROCESS");
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("Total Record URIs to delete: {Count}", recordUris?.Count ?? 0);
+                _logger.LogInformation("Start Time: {StartTime}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+
+                var startTime = DateTime.Now;
+                var results = new Dictionary<long, int>();
+
+                if (recordUris == null || !recordUris.Any())
+                {
+                    _logger.LogWarning("⚠️ No record URIs provided for batch deletion");
+                    return results;
+                }
+
+                int totalDeleted = 0;
+                int successCount = 0;
+                int failureCount = 0;
+                int notFoundCount = 0;
+
+                _logger.LogInformation("");
+                _logger.LogInformation("📝 Starting batch deletion loop...");
+                _logger.LogInformation("");
+
+                for (int i = 0; i < recordUris.Count; i++)
+                {
+                    var recordUri = recordUris[i];
+                    var percentComplete = (double)(i + 1) / recordUris.Count * 100;
+
+                    try
+                    {
+                        _logger.LogInformation("════════════════════════════════════════════════════════════════");
+                        _logger.LogInformation("🗑️ DELETING RECORD [{Current}/{Total}] - {Percentage:F1}% Complete",
+                            i + 1, recordUris.Count, percentComplete);
+                        _logger.LogInformation("════════════════════════════════════════════════════════════════");
+                        _logger.LogInformation("📋 Record URI: {RecordUri}", recordUri);
+
+                        // Delete embeddings for this record
+                        var deletedCount = await DeleteRecordEmbeddingsAsync(recordUri);
+
+                        // Store the result
+                        results[recordUri] = deletedCount;
+
+                        if (deletedCount > 0)
+                        {
+                            successCount++;
+                            totalDeleted += deletedCount;
+                            _logger.LogInformation("✅ Successfully deleted {Count} chunks for record URI {RecordUri}",
+                                deletedCount, recordUri);
+                        }
+                        else
+                        {
+                            notFoundCount++;
+                            _logger.LogWarning("⚠️ No embeddings found for record URI {RecordUri}", recordUri);
+                        }
+
+                        _logger.LogInformation("");
+                    }
+                    catch (Exception ex)
+                    {
+                        failureCount++;
+                        results[recordUri] = 0;
+                        _logger.LogError(ex, "❌ FAILED to delete embeddings for record URI {RecordUri}", recordUri);
+                        _logger.LogError("Error: {ErrorMessage}", ex.Message);
+                        _logger.LogInformation("");
+                    }
+                }
+
+                var endTime = DateTime.Now;
+                var duration = endTime - startTime;
+
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("✅ BATCH DELETION PROCESS COMPLETE");
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("📊 SUMMARY STATISTICS:");
+                _logger.LogInformation("  • Total Record URIs Requested: {Total}", recordUris.Count);
+                _logger.LogInformation("  • Successfully Deleted: {Success}", successCount);
+                _logger.LogInformation("  • Not Found (No Embeddings): {NotFound}", notFoundCount);
+                _logger.LogInformation("  • Failed: {Failed}", failureCount);
+                _logger.LogInformation("  • Total Chunks Deleted: {TotalDeleted}", totalDeleted);
+                _logger.LogInformation("  • Average Chunks per Record: {AvgChunks:F2}",
+                    successCount > 0 ? (double)totalDeleted / successCount : 0);
+                _logger.LogInformation("⏱️ TIME TAKEN:");
+                _logger.LogInformation("  • Start: {StartTime}", startTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                _logger.LogInformation("  • End: {EndTime}", endTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                _logger.LogInformation("  • Duration: {Duration}", duration.ToString(@"hh\:mm\:ss"));
+                _logger.LogInformation("  • Avg Time per Record: {AvgTime:F2}s",
+                    recordUris.Count > 0 ? duration.TotalSeconds / recordUris.Count : 0);
+                _logger.LogInformation("========================================");
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Failed to process batch deletion");
                 throw;
             }
         }
