@@ -14,25 +14,25 @@ namespace DocumentProcessingAPI.Infrastructure.Services
     {
         private readonly ContentManagerServices _contentManagerServices;
         private readonly IEmbeddingService _embeddingService;
-        private readonly QdrantVectorService _qdrantService;
+        private readonly PgVectorService _pgVectorService;
         private readonly IDocumentProcessor _documentProcessor;
         private readonly ITextChunkingService _textChunkingService;
         private readonly ILogger<RecordEmbeddingService> _logger;
         private const string RECORD_COLLECTION_PREFIX = "cm_record_";
-        private const int CHUNK_SIZE = 1000; // tokens
-        private const int CHUNK_OVERLAP = 200; // tokens
+        private const int CHUNK_SIZE = 1500; // tokens
+        private const int CHUNK_OVERLAP = 150; // tokens
 
         public RecordEmbeddingService(
             ContentManagerServices contentManagerServices,
             IEmbeddingService embeddingService,
-            QdrantVectorService qdrantService,
+            PgVectorService pgVectorService,
             IDocumentProcessor documentProcessor,
             ITextChunkingService textChunkingService,
             ILogger<RecordEmbeddingService> logger)
         {
             _contentManagerServices = contentManagerServices;
             _embeddingService = embeddingService;
-            _qdrantService = qdrantService;
+            _pgVectorService = pgVectorService;
             _documentProcessor = documentProcessor;
             _textChunkingService = textChunkingService;
             _logger = logger;
@@ -76,6 +76,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 int containersProcessed = 0;
                 int recordsWithoutContent = 0;
                 int currentRecordIndex = 0;
+                int failedCount = 0;
+                var failedRecords = new List<(long uri, string title, string error)>();
 
                 _logger.LogInformation("");
                 _logger.LogInformation("📝 Starting record processing loop...");
@@ -88,26 +90,22 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                     try
                     {
-                        _logger.LogInformation("════════════════════════════════════════════════════════════════");
-                        _logger.LogInformation("📄 PROCESSING RECORD [{Current}/{Total}] - {Percentage:F1}% Complete",
-                            currentRecordIndex, records.Count, percentComplete);
-                        _logger.LogInformation("════════════════════════════════════════════════════════════════");
-                        _logger.LogInformation("📋 Record Details:");
-                        _logger.LogInformation("   • URI: {Uri}", record.URI);
-                        _logger.LogInformation("   • Title: {Title}", record.Title);
-                        _logger.LogInformation("   • Type: {Type}", record.IsContainer);
-                        _logger.LogInformation("   • Container: {Container}", string.IsNullOrEmpty(record.Container) ? "None" : record.Container);
-                        _logger.LogInformation("   • Date Created: {DateCreated}", record.DateCreated);
+                        // Only log every 10th record progress for successful records to reduce noise
+                        if (currentRecordIndex % 10 == 0 || currentRecordIndex == 1)
+                        {
+                            _logger.LogInformation("📊 Progress: [{Current}/{Total}] - {Percentage:F1}% Complete",
+                                currentRecordIndex, records.Count, percentComplete);
+                        }
 
-                        // Check if this record already has embeddings in Qdrant
+                        // Check if this record already has embeddings in PostgreSQL
                         // Format: cm_record_{URI}_chunk_0
                         var firstChunkId = $"{RECORD_COLLECTION_PREFIX}{record.URI}_chunk_0";
-                        var existing = await _qdrantService.GetEmbeddingAsync(firstChunkId);
+                        var existing = await _pgVectorService.GetEmbeddingAsync(firstChunkId);
 
                         if (existing != null)
                         {
                             skippedCount++;
-                            _logger.LogWarning("⏭️ SKIPPING - Record already embedded in Qdrant");
+                            _logger.LogWarning("⏭️ SKIPPING - Record already embedded in PostgreSQL");
                             _logger.LogInformation("");
                             continue; // Skip this record - already processed
                         }
@@ -213,8 +211,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         // Save in batches of 50 to avoid memory issues
                         if (vectorDataList.Count >= 50)
                         {
-                            _logger.LogInformation("💾 Batch size reached (50+ embeddings). Saving to Qdrant...");
-                            await _qdrantService.SaveEmbeddingsBatchAsync(vectorDataList);
+                            _logger.LogInformation("💾 Batch size reached (50+ embeddings). Saving to PostgreSQL...");
+                            await _pgVectorService.SaveEmbeddingsBatchAsync(vectorDataList);
                             _logger.LogInformation("✅ Batch saved successfully. Queue cleared.");
                             _logger.LogInformation("");
                             vectorDataList.Clear();
@@ -222,17 +220,20 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "❌ FAILED to process record {Uri}", record.URI);
-                        _logger.LogError("Error: {ErrorMessage}", ex.Message);
-                        _logger.LogInformation("");
+                        failedCount++;
+                        failedRecords.Add((record.URI, record.Title ?? "Unknown", ex.Message));
+
+                        // Log to separate failed records file using enriched properties
+                        _logger.LogError(ex, "❌ FAILED to process record {RecordUri} - {RecordTitle}. Error: {ErrorMessage}. {FailedRecord}",
+                            record.URI, record.Title ?? "Unknown", ex.Message, true);
                     }
                 }
 
                 // Save remaining embeddings
                 if (vectorDataList.Any())
                 {
-                    _logger.LogInformation("💾 Saving final batch of {Count} embeddings to Qdrant", vectorDataList.Count);
-                    await _qdrantService.SaveEmbeddingsBatchAsync(vectorDataList);
+                    _logger.LogInformation("💾 Saving final batch of {Count} embeddings to PostgreSQL", vectorDataList.Count);
+                    await _pgVectorService.SaveEmbeddingsBatchAsync(vectorDataList);
                 }
 
                 var endTime = DateTime.Now;
@@ -245,6 +246,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("  • Total Records Retrieved: {Total}", records.Count);
                 _logger.LogInformation("  • Records Already Embedded (Skipped): {Skipped}", skippedCount);
                 _logger.LogInformation("  • New Records Processed: {Processed}", processedCount);
+                _logger.LogInformation("  • Failed Records: {Failed}", failedCount);
                 _logger.LogInformation("    ├─ Documents with Content: {DocsWithContent}", documentsWithContent);
                 _logger.LogInformation("    ├─ Records without Content: {RecordsWithoutContent}", recordsWithoutContent);
                 _logger.LogInformation("    └─ Containers (Metadata Only): {Containers}", containersProcessed);
@@ -256,6 +258,22 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("  • End: {EndTime}", endTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 _logger.LogInformation("  • Duration: {Duration}", duration.ToString(@"hh\:mm\:ss"));
                 _logger.LogInformation("  • Avg Time per Record: {AvgTime:F2}s", processedCount > 0 ? duration.TotalSeconds / processedCount : 0);
+
+                if (failedCount > 0)
+                {
+                    _logger.LogWarning("========================================");
+                    _logger.LogWarning("⚠️ FAILED RECORDS SUMMARY");
+                    _logger.LogWarning("========================================");
+                    _logger.LogWarning("Total Failed: {FailedCount}", failedCount);
+                    _logger.LogWarning("Check logs/failed-records-.txt for detailed failure information");
+                    _logger.LogWarning("Failed Records:");
+                    foreach (var failed in failedRecords)
+                    {
+                        _logger.LogWarning("  • URI: {Uri} | Title: {Title} | Error: {Error}",
+                            failed.uri, failed.title, failed.error.Split('\n')[0]); // First line of error only
+                    }
+                }
+
                 _logger.LogInformation("========================================");
 
                 return processedCount;
@@ -685,9 +703,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         }
 
         /// <summary>
-        /// Delete all embeddings (chunks) for a specific record URI from Vector DB
+        /// Delete all embeddings (chunks) for a specific record URI from PostgreSQL
         /// This removes both metadata and document content embeddings for the record
-        /// OPTIMIZED: Uses Qdrant scroll API to find actual chunks instead of checking 0-99 sequentially
+        /// OPTIMIZED: Uses efficient WHERE clause deletion in PostgreSQL
         /// </summary>
         /// <param name="recordUri">The Content Manager record URI to delete</param>
         /// <returns>Number of chunks deleted</returns>
@@ -700,33 +718,29 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var startTime = DateTime.Now;
                 int deletedCount = 0;
 
-                // OPTIMIZED: Use Qdrant scroll API to find actual point IDs (fast, direct query)
-                // This replaces the slow sequential check of chunks 0-99
-                var pointIds = await _qdrantService.GetPointIdsByRecordUriAsync(recordUri);
+                // Get count of embeddings to delete
+                var embeddingIds = await _pgVectorService.GetPointIdsByRecordUriAsync(recordUri);
 
-                if (!pointIds.Any())
+                if (!embeddingIds.Any())
                 {
                     _logger.LogWarning("⚠️ No embeddings found for record URI: {RecordUri}", recordUri);
                     return 0;
                 }
 
                 _logger.LogInformation("📋 Found {Count} embeddings to delete for record URI: {RecordUri}",
-                    pointIds.Count, recordUri);
+                    embeddingIds.Count, recordUri);
 
-                // Use efficient filter-based deletion from QdrantVectorService
-                // This method now auto-creates the index if missing and retries
-                var success = await _qdrantService.DeleteEmbeddingsByRecordUriAsync(recordUri);
+                // Use efficient WHERE clause deletion
+                var success = await _pgVectorService.DeleteEmbeddingsByRecordUriAsync(recordUri);
 
                 if (success)
                 {
-                    deletedCount = pointIds.Count; // All found embeddings should be deleted
-                    _logger.LogInformation("✅ Successfully deleted all embeddings using filter-based deletion");
+                    deletedCount = embeddingIds.Count;
+                    _logger.LogInformation("✅ Successfully deleted all embeddings using efficient WHERE clause deletion");
                 }
                 else
                 {
-                    _logger.LogWarning("⚠️ Filter-based deletion failed, deletion unsuccessful");
-                    // Note: Individual deletion fallback removed as filter-based deletion
-                    // should work after auto-creating index
+                    _logger.LogWarning("⚠️ Deletion failed");
                 }
 
                 var endTime = DateTime.Now;
@@ -737,9 +751,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("📊 DELETION STATISTICS:");
                 _logger.LogInformation("  • Record URI: {RecordUri}", recordUri);
-                _logger.LogInformation("  • Embeddings Found: {Found}", pointIds.Count);
+                _logger.LogInformation("  • Embeddings Found: {Found}", embeddingIds.Count);
                 _logger.LogInformation("  • Embeddings Deleted: {Deleted}", deletedCount);
-                _logger.LogInformation("  • Failed Deletions: {Failed}", pointIds.Count - deletedCount);
+                _logger.LogInformation("  • Failed Deletions: {Failed}", embeddingIds.Count - deletedCount);
                 _logger.LogInformation("⏱️ TIME TAKEN:");
                 _logger.LogInformation("  • Start: {StartTime}", startTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 _logger.LogInformation("  • End: {EndTime}", endTime.ToString("yyyy-MM-dd HH:mm:ss"));

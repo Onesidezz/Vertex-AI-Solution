@@ -1,10 +1,12 @@
 using DocumentProcessingAPI.Core.Entities;
 using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 
 namespace DocumentProcessingAPI.Infrastructure.Data;
 
 /// <summary>
 /// Entity Framework Database Context for Document Processing API
+/// Supports both SQL Server (Documents) and PostgreSQL (Embeddings with pgvector)
 /// </summary>
 public class DocumentProcessingDbContext : DbContext
 {
@@ -12,105 +14,112 @@ public class DocumentProcessingDbContext : DbContext
     {
     }
 
-    public DbSet<Document> Documents { get; set; } = null!;
-    public DbSet<DocumentChunk> DocumentChunks { get; set; } = null!;
+    public DbSet<Embedding> Embeddings { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        ConfigureDocumentEntity(modelBuilder);
-        ConfigureDocumentChunkEntity(modelBuilder);
+        // Enable pgvector extension
+        modelBuilder.HasPostgresExtension("vector");
+
+        ConfigureEmbeddingEntity(modelBuilder);
     }
 
-    private static void ConfigureDocumentEntity(ModelBuilder modelBuilder)
+    private static void ConfigureEmbeddingEntity(ModelBuilder modelBuilder)
     {
-        var entity = modelBuilder.Entity<Document>();
+        var entity = modelBuilder.Entity<Embedding>();
 
-        entity.ToTable("Documents");
+        entity.ToTable("Embeddings");
 
-        entity.HasKey(d => d.Id);
+        entity.HasKey(e => e.Id);
 
-        entity.Property(d => d.Id)
+        entity.Property(e => e.Id)
             .ValueGeneratedOnAdd();
 
-        entity.Property(d => d.FileName)
+        entity.Property(e => e.EmbeddingId)
             .IsRequired()
             .HasMaxLength(255);
 
-        entity.Property(d => d.FilePath)
+        // Configure vector column (3072 dimensions for Gemini embeddings)
+        entity.Property(e => e.Vector)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasColumnType("vector(3072)");
 
-        entity.Property(d => d.ContentType)
-            .HasMaxLength(100);
-
-        entity.Property(d => d.OriginalFileName)
-            .HasMaxLength(255);
-
-        entity.Property(d => d.UserId)
-            .HasMaxLength(36);
-
-        entity.Property(d => d.UploadedAt)
-            .HasDefaultValueSql("GETUTCDATE()");
-
-        entity.Property(d => d.Status)
-            .HasConversion<int>()
+        entity.Property(e => e.RecordUri)
             .IsRequired();
 
-        entity.HasIndex(d => d.UserId)
-            .HasDatabaseName("IX_Documents_UserId");
+        entity.Property(e => e.RecordTitle)
+            .HasMaxLength(500);
 
-        entity.HasIndex(d => d.Status)
-            .HasDatabaseName("IX_Documents_Status");
+        entity.Property(e => e.RecordType)
+            .HasMaxLength(50);
 
-        entity.HasIndex(d => d.UploadedAt)
-            .HasDatabaseName("IX_Documents_UploadedAt");
+        entity.Property(e => e.Container)
+            .HasMaxLength(500);
 
-        entity.HasIndex(d => new { d.UserId, d.Status })
-            .HasDatabaseName("IX_Documents_UserId_Status");
-    }
-
-    private static void ConfigureDocumentChunkEntity(ModelBuilder modelBuilder)
-    {
-        var entity = modelBuilder.Entity<DocumentChunk>();
-
-        entity.ToTable("DocumentChunks");
-
-        entity.HasKey(dc => dc.Id);
-
-        entity.Property(dc => dc.Id)
-            .ValueGeneratedOnAdd();
-
-        entity.Property(dc => dc.Content)
-            .IsRequired()
-            .HasColumnType("nvarchar(max)");
-
-        entity.Property(dc => dc.EmbeddingId)
+        entity.Property(e => e.Assignee)
             .HasMaxLength(255);
 
-        entity.Property(dc => dc.CreatedAt)
-            .HasDefaultValueSql("GETUTCDATE()");
+        entity.Property(e => e.AllParts)
+            .HasColumnType("text");
 
-        entity.HasOne(dc => dc.Document)
-            .WithMany(d => d.Chunks)
-            .HasForeignKey(dc => dc.DocumentId)
-            .OnDelete(DeleteBehavior.Cascade);
+        entity.Property(e => e.ACL)
+            .HasColumnType("text");
 
-        entity.HasIndex(dc => dc.DocumentId)
-            .HasDatabaseName("IX_DocumentChunks_DocumentId");
+        entity.Property(e => e.ChunkContent)
+            .IsRequired()
+            .HasColumnType("text");
 
-        entity.HasIndex(dc => dc.ChunkSequence)
-            .HasDatabaseName("IX_DocumentChunks_ChunkSequence");
+        entity.Property(e => e.ContentPreview)
+            .HasMaxLength(200);
 
-        entity.HasIndex(dc => dc.EmbeddingId)
-            .HasDatabaseName("IX_DocumentChunks_EmbeddingId");
+        entity.Property(e => e.FileExtension)
+            .HasMaxLength(200);
 
-        entity.HasIndex(dc => new { dc.DocumentId, dc.ChunkSequence })
-            .HasDatabaseName("IX_DocumentChunks_DocumentId_ChunkSequence")
-            .IsUnique();
+        entity.Property(e => e.FileType)
+            .HasMaxLength(200);
 
-        entity.HasIndex(dc => dc.PageNumber)
-            .HasDatabaseName("IX_DocumentChunks_PageNumber");
+        entity.Property(e => e.DocumentCategory)
+            .HasMaxLength(200);
+
+        entity.Property(e => e.EntityType)
+            .IsRequired()
+            .HasMaxLength(100)
+            .HasDefaultValue("content_manager_record");
+
+        entity.Property(e => e.IndexedAt)
+            .IsRequired()
+            .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+        entity.Property(e => e.CreatedAt)
+            .IsRequired()
+            .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+        // Create indexes
+        entity.HasIndex(e => e.EmbeddingId)
+            .IsUnique()
+            .HasDatabaseName("IX_Embeddings_EmbeddingId");
+
+        entity.HasIndex(e => e.RecordUri)
+            .HasDatabaseName("IX_Embeddings_RecordUri");
+
+        entity.HasIndex(e => e.DateCreated)
+            .HasDatabaseName("IX_Embeddings_DateCreated");
+
+        entity.HasIndex(e => e.FileType)
+            .HasDatabaseName("IX_Embeddings_FileType");
+
+        entity.HasIndex(e => e.RecordType)
+            .HasDatabaseName("IX_Embeddings_RecordType");
+
+        entity.HasIndex(e => e.EntityType)
+            .HasDatabaseName("IX_Embeddings_EntityType");
+
+        // NOTE: Vector index creation skipped in migration
+        // pgvector v0.8.1 has a 2000-dimension limit for HNSW and IVFFlat indexes
+        // Gemini embeddings are 3072 dimensions
+        // Vector search will still work (using sequential scan initially)
+        // Index can be added manually after data is loaded or when pgvector supports >2000 dims
     }
 }

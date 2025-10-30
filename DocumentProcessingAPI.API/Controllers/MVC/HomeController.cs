@@ -5,78 +5,28 @@ using Microsoft.AspNetCore.Mvc;
 namespace DocumentProcessingAPI.API.Controllers.MVC;
 
 /// <summary>
-/// MVC Controller for Upload and Search views
+/// MVC Controller for Search views
 /// </summary>
 public class HomeController : Controller
 {
-    private readonly IDocumentService _documentService;
     private readonly IRecordSearchService _recordSearchService;
     private readonly ContentManagerServices _contentManagerServices;
     private readonly ILogger<HomeController> _logger;
 
     public HomeController(
-        IDocumentService documentService,
         IRecordSearchService recordSearchService,
         ContentManagerServices contentManagerServices,
         ILogger<HomeController> logger)
     {
-        _documentService = documentService;
         _recordSearchService = recordSearchService;
         _contentManagerServices = contentManagerServices;
         _logger = logger;
     }
 
     /// <summary>
-    /// Upload page - Default landing page
+    /// Search page - Default landing page
     /// </summary>
     [HttpGet("/")]
-    [HttpGet("/Upload")]
-    public IActionResult Upload()
-    {
-        return View();
-    }
-
-    /// <summary>
-    /// Handle document upload
-    /// </summary>
-    [HttpPost("/Upload")]
-    [RequestSizeLimit(100_000_000)] // 100 MB limit
-    public async Task<IActionResult> Upload(IFormFile file, string userId = "")
-    {
-        try
-        {
-            if (file == null || file.Length == 0)
-            {
-                TempData["Error"] = "Please select a file to upload.";
-                return View();
-            }
-
-            var request = new DocumentUploadRequestDto
-            {
-                File = file,
-                UserId = userId,
-                ProcessImmediately = true
-            };
-
-            var result = await _documentService.UploadDocumentAsync(request);
-
-            TempData["Success"] = $"Document '{result.FileName}' uploaded successfully! " +
-                                 $"Status: {result.Status}, Total Chunks: {result.TotalChunks}";
-            TempData["DocumentId"] = result.Id.ToString();
-
-            return RedirectToAction("Upload");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error uploading document");
-            TempData["Error"] = $"Upload failed: {ex.Message}";
-            return View();
-        }
-    }
-
-    /// <summary>
-    /// Search page
-    /// </summary>
     [HttpGet("/Search")]
     public IActionResult Search()
     {

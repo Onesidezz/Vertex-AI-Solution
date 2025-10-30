@@ -17,6 +17,12 @@ Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
     .WriteTo.Console()
     .WriteTo.File("logs/documentprocessing-.txt", rollingInterval: RollingInterval.Day)
+    .WriteTo.Logger(lc => lc
+        .Filter.ByIncludingOnly(evt => evt.Level == Serilog.Events.LogEventLevel.Error
+            && evt.Properties.ContainsKey("FailedRecord"))
+        .WriteTo.File("logs/failed-records-.txt",
+            rollingInterval: RollingInterval.Day,
+            outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} | URI: {RecordUri} | Title: {RecordTitle} | Error: {Message}{NewLine}{Exception}"))
     .CreateLogger();
 
 builder.Host.UseSerilog();
@@ -60,9 +66,16 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// Database
+// Database - SQL Server for Documents, PostgreSQL for Embeddings
 builder.Services.AddDbContext<DocumentProcessingDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    // Use PostgreSQL for embeddings with pgvector support
+    options.UseNpgsql(builder.Configuration.GetConnectionString("PostgresConnection"),
+        npgsqlOptions => npgsqlOptions.UseVector());
+
+    // Optionally also configure SQL Server if you want to keep document management
+    // options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
+});
 
 // Google Gemini API configuration
 // Requires valid Gemini API key for embedding generation
@@ -87,16 +100,12 @@ builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
 builder.Services.AddScoped<ITextChunkingService, TextChunkingService>();
 builder.Services.AddScoped<IEmbeddingService, GeminiEmbeddingService>(); // Google Gemini embedding service
 
-// Vector Database - Qdrant (replacing LocalEmbeddingStorageService)
-builder.Services.AddSingleton<QdrantVectorService>(); // Qdrant vector database service
-
-// Keep local storage for backward compatibility (optional)
-builder.Services.AddScoped<ILocalEmbeddingStorageService, LocalEmbeddingStorageService>(); // Local embedding storage
+// Vector Database - PostgreSQL with pgvector
+builder.Services.AddScoped<PgVectorService>(); // PostgreSQL vector database service
 
 builder.Services.AddScoped<IFileStorageService, LocalFileStorageService>();
-builder.Services.AddScoped<IDocumentService, DocumentService>();
-builder.Services.AddScoped<ISearchService, SearchService>();
-builder.Services.AddScoped<IRagService, RagService>(); // RAG service with Gemini embeddings
+// DocumentService, SearchService, and RagService removed - only using Content Manager record services
+// builder.Services.AddScoped<IRagService, RagService>(); // RAG service with Gemini embeddings
 
 // Content Manager Record Embedding Services
 builder.Services.AddScoped<IRecordEmbeddingService, RecordEmbeddingService>();
@@ -237,13 +246,10 @@ app.UseAuthorization();
 // Health Checks
 app.MapHealthChecks("/health");
 
-// Redirect root to Swagger
-app.MapGet("/", () => Results.Redirect("/swagger"));
-
-// MVC Routes - Default route for MVC pages (accessible via /Home/Upload)
+// MVC Routes - Default route for MVC pages (Search is the landing page)
 app.MapControllerRoute(
     name: "default",
-    pattern: "{controller=Home}/{action=Upload}/{id?}");
+    pattern: "{controller=Home}/{action=Search}/{id?}");
 
 // API Controllers - Keep API endpoints working
 app.MapControllers();
@@ -258,33 +264,25 @@ using (var scope = app.Services.CreateScope())
     {
         // Ensure database is created
         await context.Database.EnsureCreatedAsync();
-        logger.LogInformation("✅ Database initialized successfully");
+        logger.LogInformation("✅ PostgreSQL database initialized successfully");
 
-        // Ensure embeddings directory exists (for local storage backward compatibility)
-        var embeddingsPath = builder.Configuration["Embeddings:StoragePath"] ?? "C:\\Users\\ukhan2\\source\\repos\\DocumentProcessingAPI\\Embeddings";
-        Directory.CreateDirectory(embeddingsPath);
-        logger.LogInformation("✅ Embeddings directory initialized: {Path}", embeddingsPath);
-
-        // Initialize Qdrant collection (cloud instance)
+        // Initialize pgvector extension
         try
         {
-            var qdrantService = scope.ServiceProvider.GetRequiredService<QdrantVectorService>();
-            await qdrantService.InitializeCollectionAsync();
-            logger.LogInformation("✅ Qdrant vector database initialized successfully");
+            var pgVectorService = scope.ServiceProvider.GetRequiredService<PgVectorService>();
+            await pgVectorService.InitializeAsync();
+            logger.LogInformation("✅ pgvector extension initialized successfully");
 
             // Get collection stats
-            var collectionInfo = await qdrantService.GetCollectionInfoAsync();
-            if (collectionInfo != null)
-            {
-                logger.LogInformation("📊 Qdrant collection stats - Vectors: {VectorCount}, Status: {Status}",
-                    collectionInfo.VectorsCount, collectionInfo.Status);
-            }
+            var (count, lastIndexed) = await pgVectorService.GetCollectionStatsAsync();
+            logger.LogInformation("📊 Embeddings stats - Total: {Count}, Last Indexed: {LastIndexed}",
+                count, lastIndexed?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never");
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "❌ Failed to initialize Qdrant collection");
+            logger.LogError(ex, "❌ Failed to initialize pgvector extension");
             logger.LogWarning("⚠️ API will start but vector search may not work properly.");
-            logger.LogWarning("⚠️ Please verify Qdrant Cloud connection settings in appsettings.json");
+            logger.LogWarning("⚠️ Please ensure PostgreSQL has pgvector extension installed.");
         }
     }
     catch (Exception ex)

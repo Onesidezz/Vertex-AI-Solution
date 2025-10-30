@@ -16,20 +16,20 @@ namespace DocumentProcessingAPI.Infrastructure.Services
     public class RecordSearchService : IRecordSearchService
     {
         private readonly IEmbeddingService _embeddingService;
-        private readonly QdrantVectorService _qdrantService;
+        private readonly PgVectorService _pgVectorService;
         private readonly ILogger<RecordSearchService> _logger;
         private readonly IConfiguration _configuration;
         private readonly ContentManagerServices _contentManagerServices;
 
         public RecordSearchService(
             IEmbeddingService embeddingService,
-            QdrantVectorService qdrantService,
+            PgVectorService pgVectorService,
             ILogger<RecordSearchService> logger,
             IConfiguration configuration,
             ContentManagerServices contentManagerServices)
         {
             _embeddingService = embeddingService;
-            _qdrantService = qdrantService;
+            _pgVectorService = pgVectorService;
             _logger = logger;
             _configuration = configuration;
             _contentManagerServices = contentManagerServices;
@@ -171,27 +171,23 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 }
 
                 // ============================================================
-                // STEP 1.5: KEYWORD EXTRACTION WITH GEMINI
+                // STEP 1.5: SMART KEYWORD EXTRACTION (LOCAL - NO API COST)
+                // For Content Manager Index Search
                 // ============================================================
-                _logger.LogInformation("🔍 STEP 1.5: Extracting Keywords with Gemini");
+                _logger.LogInformation("🔍 STEP 1.5: Extracting Keywords for CM Index (Smart Local Extraction)");
 
-                List<string> extractedKeywords = new List<string>();
-                try
+                // Extract keywords locally without Gemini API call to save costs
+                // These are used for Content Manager IDOL Index filtering
+                var extractedKeywords = ExtractSmartKeywords(query);
+
+                if (extractedKeywords.Any())
                 {
-                    extractedKeywords = await ExtractKeywordsWithGemini(cleanQuery);
-                    if (extractedKeywords.Any())
-                    {
-                        _logger.LogInformation("   ✅ Extracted keywords: {Keywords}",
-                            string.Join(", ", extractedKeywords));
-                    }
-                    else
-                    {
-                        _logger.LogInformation("   ℹ️ No specific keywords extracted - will use semantic search");
-                    }
+                    _logger.LogInformation("   ✅ Extracted keywords for CM search: {Keywords}",
+                        string.Join(", ", extractedKeywords));
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogWarning(ex, "   ⚠️ Keyword extraction failed, continuing without keywords");
+                    _logger.LogInformation("   ℹ️ No specific keywords extracted for CM search");
                 }
 
                 // ============================================================
@@ -238,11 +234,20 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                         // Continue to semantic search even if CM returns 0 or null
                         // Semantic search might still find relevant results
+                        // ALSO: If CM returns very few results (< topK), do unrestricted search
+                        // This prevents over-filtering when specific numeric values are only in chunks
                         if (candidateRecordUris == null || candidateRecordUris.Count == 0)
                         {
                             _logger.LogInformation("   ℹ️ No records from CM Index, continuing with full semantic search");
                             candidateRecordUris = null; // Set to null to skip intersection later
                             recordDetails = null;
+                        }
+                        else if (candidateRecordUris.Count < topK)
+                        {
+                            _logger.LogWarning("   ⚠️ CM Index returned only {Count} records (less than topK={TopK})",
+                                candidateRecordUris.Count, topK);
+                            _logger.LogWarning("   ⚠️ This might over-filter results. Consider using full semantic search for better recall.");
+                            _logger.LogInformation("   ℹ️ Proceeding with CM-filtered search, but results may be incomplete.");
                         }
                     }
                     catch (Exception ex)
@@ -277,33 +282,83 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("   📊 Search Parameters: Limit={SearchLimit}, MinScore={AdjustedMinScore}",
                     searchLimit, adjustedMinScore);
 
-                // If we have URIs from CM Index, append them to enhance the query
-                // URIs provide lightweight hints - chunks have record_uri in metadata during embedding
-                var enhancedQuery = cleanQuery;
-                if (recordDetails != null && recordDetails.Count > 0)
+                // IMPORTANT: Generate embedding for ONLY the semantic query
+                // DO NOT add URIs to the embedding query - they pollute semantic similarity
+                // URIs will be used as SQL-level filters in the vector search
+                _logger.LogInformation("   📝 Generating embedding for semantic query only (no URI pollution)");
+                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(cleanQuery);
+
+                // ============================================================
+                // STEP 3.5: GEMINI CONTEXT EXTRACTION (FOR VECTOR BOOST ONLY)
+                // ============================================================
+                _logger.LogInformation("   🤖 Extracting context with Gemini for vector search boosting");
+
+                List<string> geminiContextKeywords = new List<string>();
+                try
                 {
-                    // Append URIs only (not full record details) to keep query lightweight
-                    enhancedQuery = $"{cleanQuery} {string.Join(" ", recordDetails)}";
-                    _logger.LogInformation("   ✅ Enhanced query with {Count} URIs from CM Index",
-                        recordDetails.Count);
-                    _logger.LogDebug("   Enhanced query: {Query}",
-                        enhancedQuery.Length > 300 ? enhancedQuery.Substring(0, 300) + "..." : enhancedQuery);
+                    // Use Gemini to extract contextual keywords for intelligent vector boosting
+                    // This is different from local extraction - Gemini understands intent and context
+                    geminiContextKeywords = await ExtractKeywordsWithGemini(cleanQuery);
+
+                    if (geminiContextKeywords.Any())
+                    {
+                        _logger.LogInformation("   ✅ Gemini extracted context keywords: {Keywords}",
+                            string.Join(", ", geminiContextKeywords));
+                    }
+                    else
+                    {
+                        _logger.LogInformation("   ℹ️ Gemini returned no context keywords - using local keywords as fallback");
+                        // Fallback to local keywords if Gemini returns nothing
+                        geminiContextKeywords = extractedKeywords;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "   ⚠️ Gemini context extraction failed - using local keywords as fallback");
+                    // Fallback to local keywords if Gemini API fails
+                    geminiContextKeywords = extractedKeywords;
                 }
 
-                // Generate embedding for the query (with record details if available)
-                var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(enhancedQuery);
+                // ============================================================
+                // STEP 3.6: HYBRID VS SEMANTIC SEARCH DECISION
+                // ============================================================
+                List<(string id, float similarity, Dictionary<string, object> metadata)> similarResults;
 
-                // Search similar embeddings from Qdrant
-                var similarResults = await _qdrantService.SearchSimilarAsync(
-                    queryEmbedding,
-                    searchLimit,
-                    adjustedMinScore);
+                // Use hybrid search if we have context keywords (from Gemini or fallback)
+                if (geminiContextKeywords != null && geminiContextKeywords.Any())
+                {
+                    _logger.LogInformation("   🔀 Using HYBRID search (semantic + keyword boost) with {Count} context keywords",
+                        geminiContextKeywords.Count);
+                    similarResults = await _pgVectorService.SearchSimilarWithKeywordBoostAsync(
+                        queryEmbedding,
+                        geminiContextKeywords, // Use Gemini context keywords for intelligent boosting
+                        searchLimit,
+                        adjustedMinScore,
+                        candidateRecordUris,
+                        keywordBoostWeight: 0.4f); // 40% weight to keyword matching
+                }
+                else
+                {
+                    _logger.LogInformation("   🎯 Using SEMANTIC search only (no context keywords available)");
+                    // Standard semantic search for general queries
+                    similarResults = await _pgVectorService.SearchSimilarAsync(
+                        queryEmbedding,
+                        searchLimit,
+                        adjustedMinScore,
+                        candidateRecordUris);
+                }
 
-                _logger.LogInformation("   ✅ Qdrant returned {Count} results", similarResults.Count);
+                if (candidateRecordUris != null && candidateRecordUris.Count > 0)
+                {
+                    _logger.LogInformation("   ✅ Applied RecordUri filter at PostgreSQL level: {Count} URIs",
+                        candidateRecordUris.Count);
+                }
+
+                _logger.LogInformation("   ✅ PostgreSQL returned {Count} results", similarResults.Count);
 
                 if (!similarResults.Any())
                 {
-                    _logger.LogWarning("   ⚠️ No results found from Qdrant search");
+                    _logger.LogWarning("   ⚠️ No results found from PostgreSQL search");
                     return new RecordSearchResponseDto
                     {
                         Query = query,
@@ -323,38 +378,15 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("   ✅ Filtered to {Count} Content Manager records", recordResults.Count);
 
                 // ============================================================
-                // STEP 4: INTERSECT CM CANDIDATES WITH SEMANTIC RESULTS
+                // STEP 4: INTERSECTION ALREADY DONE AT POSTGRESQL LEVEL
                 // ============================================================
-                if (candidateRecordUris != null && candidateRecordUris.Count > 0)
-                {
-                    _logger.LogInformation("🔍 STEP 4: Intersecting CM candidates with semantic results");
-
-                    var beforeIntersect = recordResults.Count;
-                    recordResults = recordResults
-                        .Where(r => candidateRecordUris.Contains(GetMetadataValue<long>(r.metadata, "record_uri")))
-                        .ToList();
-
-                    _logger.LogInformation("   ✅ After intersection: {Count} results (filtered out {Removed})",
-                        recordResults.Count, beforeIntersect - recordResults.Count);
-
-                    if (!recordResults.Any())
-                    {
-                        _logger.LogWarning("   ⚠️ No overlap between CM Index and Semantic Search results");
-                        return new RecordSearchResponseDto
-                        {
-                            Query = query,
-                            Results = new List<RecordSearchResultDto>(),
-                            TotalResults = 0,
-                            QueryTime = (float)stopwatch.Elapsed.TotalSeconds,
-                            SynthesizedAnswer = "No records found matching both the index search criteria and semantic relevance. Try broadening your search."
-                        };
-                    }
-                }
+                // NOTE: RecordUri filtering is now done efficiently in the PostgreSQL query
+                // No need for post-filtering intersection - results already contain only the URIs from CM Index
 
                 // ============================================================
                 // STEP 5: APPLY POST-FILTERS (if not already applied by CM search)
                 // ============================================================
-                _logger.LogInformation("🔍 STEP 5: Applying Post-Filters");
+                _logger.LogInformation("🔍 STEP 4: Applying Post-Filters");
 
                 // Apply file type filtering if specified (only if not already applied by CM search)
                 if (fileTypeFilters.Any())
@@ -438,7 +470,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var synthesizedAnswer = "";
                 try
                 {
-                    synthesizedAnswer = await SynthesizeRecordAnswerAsync(query, searchResults);
+                   // synthesizedAnswer = await SynthesizeRecordAnswerAsync(query, searchResults);
                 }
                 catch (Exception ex)
                 {
@@ -486,15 +518,222 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
             // Remove extra whitespace and normalize
             query = System.Text.RegularExpressions.Regex.Replace(query.Trim(), @"\s+", " ");
-            
+
             // Convert smart quotes to regular quotes
             query = query.Replace(""", "\"").Replace(""", "\"").Replace("'", "'").Replace("'", "'");
-            
+
             // Normalize common variations
             query = query.Replace(" & ", " and ");
             query = query.Replace(" + ", " and ");
-            
+
             return query;
+        }
+
+        /// <summary>
+        /// Universal dynamic keyword extraction for 40TB+ of any data type
+        /// Strategy: Extract ANY distinctive tokens that could match exact content
+        /// Works for: numbers, IDs, codes, names, technical terms, ANY specific values
+        /// </summary>
+        private List<string> ExtractSmartKeywords(string query)
+        {
+            var keywords = new List<string>();
+
+            // STRATEGY: Extract tokens that are SPECIFIC enough to match exact content
+            // NOT generic question words - those are for semantic search only
+
+            // 1. QUOTED PHRASES - Highest priority (explicit user intent)
+            var quotedPattern = @"""([^""]+)""|'([^']+)'";
+            var quoted = System.Text.RegularExpressions.Regex.Matches(query, quotedPattern);
+            foreach (System.Text.RegularExpressions.Match match in quoted)
+            {
+                var phrase = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+                if (!string.IsNullOrWhiteSpace(phrase) && phrase.Length >= 2)
+                {
+                    keywords.Add(phrase.Trim());
+                }
+            }
+
+            // 2. ANY NUMBERS - All numbers are potentially important identifiers
+            // Includes: 11895.77, 142, 2024, phone numbers, IDs, amounts, etc.
+            var numberPattern = @"\b\d+(?:[.,]\d+)*\b";
+            var numbers = System.Text.RegularExpressions.Regex.Matches(query, numberPattern);
+            foreach (System.Text.RegularExpressions.Match match in numbers)
+            {
+                var num = match.Value;
+                // Include numbers with 2+ digits OR decimals (skip single digits like "a", "1")
+                if (num.Length >= 2 || num.Contains(".") || num.Contains(","))
+                {
+                    keywords.Add(num.Replace(",", "")); // Normalize: 11,895.77 → 11895.77
+                }
+            }
+
+            // 3. ALPHANUMERIC TOKENS - Any mix of letters+numbers is likely a code/ID
+            // Matches: INV-00020, UKHAN2, ABC123, PO_2024, REC-001, etc.
+            var alphanumericPattern = @"\b[A-Za-z0-9]+[-_./\\][A-Za-z0-9]+(?:[-_./\\][A-Za-z0-9]+)*\b|\b[A-Za-z]+\d+[A-Za-z0-9]*\b|\b\d+[A-Za-z]+[A-Za-z0-9]*\b";
+            var alphanumerics = System.Text.RegularExpressions.Regex.Matches(query, alphanumericPattern);
+            foreach (System.Text.RegularExpressions.Match match in alphanumerics)
+            {
+                if (match.Value.Length >= 3) // Minimum length to avoid noise
+                {
+                    keywords.Add(match.Value);
+                }
+            }
+
+            // 4. CAPITALIZED WORDS - Likely proper nouns (names, places, brands)
+            // Matches: Umar, Khan, Microsoft, NewYork, etc.
+            var capitalizedPattern = @"\b[A-Z][a-z]+\b";
+            var capitalized = System.Text.RegularExpressions.Regex.Matches(query, capitalizedPattern);
+
+            // Skip common English stop words and question words
+            var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Which", "What", "Where", "When", "Why", "How", "Who", "The", "This", "That",
+                "These", "Those", "Are", "Is", "Was", "Were", "Be", "Been", "Being",
+                "Have", "Has", "Had", "Do", "Does", "Did", "Can", "Could", "Would", "Should",
+                "May", "Might", "Must", "Will", "Shall", "In", "On", "At", "To", "For", "From",
+                "By", "With", "About", "As", "Of", "Or", "And", "But", "If", "Then", "Than"
+            };
+
+            foreach (System.Text.RegularExpressions.Match match in capitalized)
+            {
+                if (!stopWords.Contains(match.Value) && match.Value.Length >= 3)
+                {
+                    keywords.Add(match.Value);
+                }
+            }
+
+            // 5. MULTI-WORD CAPITALIZED PHRASES - Full names, compound proper nouns
+            // Matches: "Umar Khan", "New York", "Microsoft Azure", etc.
+            var multiWordPattern = @"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b";
+            var multiWords = System.Text.RegularExpressions.Regex.Matches(query, multiWordPattern);
+            foreach (System.Text.RegularExpressions.Match match in multiWords)
+            {
+                // Split and check each word
+                var words = match.Value.Split(' ');
+                if (words.All(w => !stopWords.Contains(w)))
+                {
+                    keywords.Add(match.Value);
+                }
+            }
+
+            // 6. UNCOMMON/TECHNICAL WORDS - Words that are likely domain-specific
+            // These are rare enough that they'll match specific content
+            var tokens = query.Split(new[] { ' ', ',', '.', '?', '!', ';', ':' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Common English words that should NOT be extracted (too generic)
+            var genericWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                // Question words
+                "which", "what", "where", "when", "why", "how", "who", "whose", "whom",
+                // Common verbs
+                "show", "get", "find", "search", "list", "display", "give", "tell", "fetch",
+                "have", "has", "had", "do", "does", "did", "is", "are", "was", "were", "be", "been",
+                // Common nouns (too generic for 40TB data)
+                "record", "records", "document", "documents", "file", "files", "data", "item", "items",
+                // Prepositions
+                "in", "on", "at", "to", "for", "from", "with", "by", "about", "of", "the", "a", "an",
+                // Conjunctions
+                "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
+                // Others
+                "all", "some", "any", "me", "my", "mine", "you", "your", "yours"
+            };
+
+            foreach (var token in tokens)
+            {
+                var cleanToken = token.Trim().ToLowerInvariant();
+
+                // Extract if:
+                // - Length >= 4 (substantial word)
+                // - NOT a generic word
+                // - Contains letters (not pure symbol)
+                if (cleanToken.Length >= 4 &&
+                    !genericWords.Contains(cleanToken) &&
+                    cleanToken.Any(char.IsLetter))
+                {
+                    keywords.Add(token.Trim());
+                }
+            }
+
+            // 7. SPECIAL CHARACTERS PRESERVED - Technical codes with symbols
+            // Matches: @username, #hashtag, version:1.2.3, file.ext, etc.
+            var specialPattern = @"\b[A-Za-z0-9]+[@#:./\\][A-Za-z0-9.]+\b";
+            var specials = System.Text.RegularExpressions.Regex.Matches(query, specialPattern);
+            foreach (System.Text.RegularExpressions.Match match in specials)
+            {
+                keywords.Add(match.Value);
+            }
+
+            // Remove duplicates and filter out redundant single words that are part of phrases
+            var uniqueKeywords = new List<string>();
+            var keywordsLower = keywords.Select(k => k.ToLowerInvariant()).ToList();
+
+            foreach (var keyword in keywords)
+            {
+                var keywordLower = keyword.ToLowerInvariant();
+
+                // Skip if this keyword is already added (case-insensitive duplicate)
+                if (uniqueKeywords.Any(uk => uk.ToLowerInvariant() == keywordLower))
+                    continue;
+
+                // Skip if this single word is part of a longer phrase in the list
+                // Example: Skip "Pending" if "Pending Amount" exists
+                var isSingleWord = !keyword.Contains(" ");
+                if (isSingleWord)
+                {
+                    var isPartOfPhrase = keywordsLower.Any(k =>
+                        k != keywordLower &&
+                        k.Contains(" ") &&
+                        k.Contains(keywordLower));
+
+                    if (isPartOfPhrase)
+                    {
+                        // This single word is redundant - skip it
+                        continue;
+                    }
+                }
+
+                // Add if minimum length met
+                if (keyword.Length >= 2)
+                {
+                    uniqueKeywords.Add(keyword);
+                }
+            }
+
+            return uniqueKeywords;
+        }
+
+        /// <summary>
+        /// Legacy method - kept for backward compatibility
+        /// Use ExtractSmartKeywords instead
+        /// </summary>
+        private List<string> ExtractKeywordsAndNumbers(string query)
+        {
+            var keywords = new List<string>();
+
+            // Extract numbers (including decimals, currency)
+            var numberPattern = @"\$?[\d,]+\.?\d*";
+            var numbers = System.Text.RegularExpressions.Regex.Matches(query, numberPattern);
+            foreach (System.Text.RegularExpressions.Match match in numbers)
+            {
+                var cleanNumber = match.Value.Replace(",", "").Replace("$", "");
+                if (!string.IsNullOrWhiteSpace(cleanNumber) && cleanNumber.Length > 0)
+                {
+                    keywords.Add(cleanNumber);
+                }
+            }
+
+            // Extract quoted phrases
+            var quotedPattern = @"""([^""]+)""";
+            var quoted = System.Text.RegularExpressions.Regex.Matches(query, quotedPattern);
+            foreach (System.Text.RegularExpressions.Match match in quoted)
+            {
+                if (!string.IsNullOrWhiteSpace(match.Groups[1].Value))
+                {
+                    keywords.Add(match.Groups[1].Value);
+                }
+            }
+
+            return keywords;
         }
 
 
@@ -2149,6 +2388,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 contextBuilder.AppendLine($"Type: {result.RecordType}");
 
                 // Add the actual chunk content if available
+                // Gemini will handle OCR artifacts and formatting automatically
                 if (!string.IsNullOrWhiteSpace(result.ContentPreview))
                 {
                     contextBuilder.AppendLine($"Content: {result.ContentPreview}");
@@ -2166,11 +2406,31 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
             contextBuilder.AppendLine("==================");
             contextBuilder.AppendLine();
+            contextBuilder.AppendLine("IMPORTANT NOTES:");
+            contextBuilder.AppendLine("- The content above may contain OCR scanning artifacts (extra spaces, broken words, garbled text)");
+            contextBuilder.AppendLine("- Your task is to interpret the content intelligently and present it in clean, readable format");
+            contextBuilder.AppendLine();
             contextBuilder.AppendLine("INSTRUCTIONS:");
-            contextBuilder.AppendLine("- Answer the question using the records found above");
-            contextBuilder.AppendLine("- List ALL relevant records with their URIs and key information");
-            contextBuilder.AppendLine("- If asked about specific dates or metadata, cite the exact values found");
-            contextBuilder.AppendLine("- Be concise but comprehensive - include all matching records, not just a subset");
+            contextBuilder.AppendLine("1. INTERPRET & CLEAN:");
+            contextBuilder.AppendLine("   - Automatically fix OCR errors (e.g., 'ServiceAP I' → 'ServiceAPI', 'II S' → 'IIS')");
+            contextBuilder.AppendLine("   - Reconstruct broken words (e.g., 'Micro Focusoroneofits' → 'Micro Focus or one of its')");
+            contextBuilder.AppendLine("   - Remove page markers like '[END PAGE X]'");
+            contextBuilder.AppendLine("   - Fix spacing issues in technical terms (API, SDK, XML, JSON, SQL, HTTP, etc.)");
+            contextBuilder.AppendLine();
+            contextBuilder.AppendLine("2. FORMAT PROFESSIONALLY:");
+            contextBuilder.AppendLine("   - Use clear markdown formatting (headers, bullet points, code blocks)");
+            contextBuilder.AppendLine("   - Organize content into logical sections");
+            contextBuilder.AppendLine("   - Make technical documentation easy to read");
+            contextBuilder.AppendLine();
+            contextBuilder.AppendLine("3. BE COMPREHENSIVE:");
+            contextBuilder.AppendLine("   - List ALL relevant records with URIs and titles");
+            contextBuilder.AppendLine("   - Include key metadata (dates, types, etc.)");
+            contextBuilder.AppendLine("   - Extract and present the most important information from the content");
+            contextBuilder.AppendLine();
+            contextBuilder.AppendLine("4. BE ACCURATE:");
+            contextBuilder.AppendLine("   - Don't invent information not present in the records");
+            contextBuilder.AppendLine("   - If content is unclear due to OCR errors, use your best interpretation");
+            contextBuilder.AppendLine("   - Cite record URIs when referencing specific information");
             contextBuilder.AppendLine();
             contextBuilder.AppendLine("ANSWER:");
 
