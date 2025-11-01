@@ -1,6 +1,7 @@
 ﻿using DocumentProcessingAPI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.IO.Compression;
 using TRIM.SDK;
 
 namespace DocumentProcessingAPI.Core.DTOs
@@ -249,6 +250,114 @@ namespace DocumentProcessingAPI.Core.DTOs
             catch (Exception ex)
             {
                 Console.WriteLine($"Error in Download method for ID {id}: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Download multiple records and package them as a ZIP file
+        /// </summary>
+        public async Task<FileHandaler> DownloadMultipleAsZipAsync(List<long> recordUris)
+        {
+            try
+            {
+                _logger.LogInformation("Starting bulk download for {Count} records", recordUris.Count);
+
+                var database = await GetDatabaseAsync();
+                var tempFolder = Path.Combine(@"C:\Temp\Download", $"Bulk_{DateTime.Now:yyyyMMddHHmmss}");
+                Directory.CreateDirectory(tempFolder);
+
+                var downloadedFiles = new List<string>();
+                int successCount = 0;
+                int failCount = 0;
+
+                foreach (var uri in recordUris)
+                {
+                    try
+                    {
+                        Record record = new Record(database, uri);
+
+                        if (!record.IsElectronic)
+                        {
+                            _logger.LogWarning("Record {Uri} is not electronic, skipping", uri);
+                            failCount++;
+                            continue;
+                        }
+
+                        string fileName = $"{record.Title}.{record.Extension}";
+                        // Sanitize filename
+                        fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+
+                        string outputPath = Path.Combine(tempFolder, fileName);
+
+                        // Handle duplicate filenames
+                        int counter = 1;
+                        while (File.Exists(outputPath))
+                        {
+                            fileName = $"{record.Title}_{counter}.{record.Extension}";
+                            fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
+                            outputPath = Path.Combine(tempFolder, fileName);
+                            counter++;
+                        }
+
+                        string savedPath = record.GetDocument(
+                            outputPath,
+                            false,
+                            "Downloaded via bulk download",
+                            outputPath
+                        );
+
+                        downloadedFiles.Add(savedPath);
+                        successCount++;
+                        _logger.LogInformation("Downloaded record {Uri}: {FileName}", uri, fileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to download record {Uri}", uri);
+                        failCount++;
+                    }
+                }
+
+                if (downloadedFiles.Count == 0)
+                {
+                    _logger.LogWarning("No files were downloaded successfully");
+                    Directory.Delete(tempFolder, true);
+                    return null;
+                }
+
+                // Create ZIP file
+                string zipFileName = $"Records_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                string zipPath = Path.Combine(@"C:\Temp\Download", zipFileName);
+
+                using (var zipArchive = System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    foreach (var filePath in downloadedFiles)
+                    {
+                        zipArchive.CreateEntryFromFile(filePath, Path.GetFileName(filePath));
+                    }
+                }
+
+                // Clean up temp folder
+                Directory.Delete(tempFolder, true);
+
+                // Read ZIP file bytes
+                var zipBytes = File.ReadAllBytes(zipPath);
+
+                var fileHandler = new FileHandaler
+                {
+                    File = zipBytes,
+                    FileName = zipFileName,
+                    LocalDownloadPath = zipPath
+                };
+
+                _logger.LogInformation("Bulk download completed: {SuccessCount} succeeded, {FailCount} failed. ZIP size: {Size} bytes",
+                    successCount, failCount, zipBytes.Length);
+
+                return fileHandler;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in DownloadMultipleAsZipAsync");
                 throw;
             }
         }

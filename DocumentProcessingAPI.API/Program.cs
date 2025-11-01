@@ -77,15 +77,10 @@ builder.Services.AddDbContext<DocumentProcessingDbContext>(options =>
     // options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
-// Google Gemini API configuration
-// Requires valid Gemini API key for embedding generation
-// Google Gemini API configuration
-builder.Services.AddHttpClient("Gemini", client =>
-{
-    client.BaseAddress = new Uri("https://generativelanguage.googleapis.com/v1beta/");
-    client.DefaultRequestHeaders.Add("x-goog-api-key", builder.Configuration["Gemini:ApiKey"]);
-});
-// Required for GeminiEmbeddingService
+// Vertex AI configuration
+// Uses Google Cloud authentication (gcloud auth application-default login)
+// No HTTP client needed - Vertex AI SDK handles authentication
+// Configuration is in appsettings.json under "VertexAI" section
 
 // File System Abstraction
 builder.Services.AddSingleton<IFileSystem, FileSystem>();

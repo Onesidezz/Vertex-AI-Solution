@@ -3,33 +3,49 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
+using Google.Cloud.AIPlatform.V1;
+using Google.Protobuf.WellKnownTypes;
 
 namespace DocumentProcessingAPI.Infrastructure.Services;
 
 /// <summary>
-/// Google Gemini embedding service using the Gemini Embedding API
-/// Provides high-quality embeddings via REST API calls
+/// Google Vertex AI embedding service using text-embedding-005
+/// Provides high-quality embeddings via Vertex AI SDK
 /// </summary>
 public class GeminiEmbeddingService : IEmbeddingService
 {
-    private readonly HttpClient _httpClient;
     private readonly ILogger<GeminiEmbeddingService> _logger;
     private readonly IConfiguration _configuration;
     private readonly int _embeddingDimension;
+    private readonly string _projectId;
+    private readonly string _location;
+    private readonly string _embeddingModel;
+    private readonly PredictionServiceClient _predictionClient;
 
-    public GeminiEmbeddingService(IHttpClientFactory httpClientFactory, ILogger<GeminiEmbeddingService> logger, IConfiguration configuration)
+    public GeminiEmbeddingService(ILogger<GeminiEmbeddingService> logger, IConfiguration configuration)
     {
-        _httpClient = httpClientFactory.CreateClient("Gemini");
         _logger = logger;
         _configuration = configuration;
 
-        // Read embedding dimension from configuration, default to 3072 for highest quality
-        if (!int.TryParse(_configuration["Gemini:EmbeddingDimension"], out _embeddingDimension))
+        // Read Vertex AI configuration
+        _projectId = _configuration["VertexAI:ProjectId"] ?? throw new InvalidOperationException("VertexAI:ProjectId not configured");
+        _location = _configuration["VertexAI:Location"] ?? "us-central1";
+        _embeddingModel = _configuration["VertexAI:EmbeddingModel"] ?? "text-embedding-005";
+
+        // Read embedding dimension from configuration
+        if (!int.TryParse(_configuration["VertexAI:EmbeddingDimension"], out _embeddingDimension))
         {
-            _embeddingDimension = 3072; // Default to highest quality dimension
+            _embeddingDimension = 768; // Default dimension for text-embedding-005
         }
 
-        _logger.LogInformation("GeminiEmbeddingService initialized with {Dimensions} dimensions", _embeddingDimension);
+        // Initialize Vertex AI client
+        _predictionClient = new PredictionServiceClientBuilder
+        {
+            Endpoint = $"{_location}-aiplatform.googleapis.com"
+        }.Build();
+
+        _logger.LogInformation("Vertex AI Embedding Service initialized - Project: {Project}, Location: {Location}, Model: {Model}, Dimensions: {Dimensions}",
+            _projectId, _location, _embeddingModel, _embeddingDimension);
     }
 
     public async Task<float[]> GenerateEmbeddingAsync(string text)
@@ -42,52 +58,65 @@ public class GeminiEmbeddingService : IEmbeddingService
 
         try
         {
-            _logger.LogInformation("🔄 Generating embedding for text (length: {Length}) - Testing default dimensions (no outputDimensionality parameter)",
-                text.Length);
+            _logger.LogInformation("🔄 Generating Vertex AI embedding for text (length: {Length})", text.Length);
 
-            var request = new
+            // Build the endpoint name
+            var endpoint = EndpointName.FromProjectLocationPublisherModel(
+                _projectId,
+                _location,
+                "google",
+                _embeddingModel
+            );
+
+            // Create the prediction request
+            var instance = new Google.Protobuf.WellKnownTypes.Value
             {
-                model = "models/gemini-embedding-001",  // Correct model name
-                content = new
+                StructValue = new Google.Protobuf.WellKnownTypes.Struct
                 {
-                    parts = new[]
+                    Fields =
                     {
-                        new { text }
+                        ["content"] = Google.Protobuf.WellKnownTypes.Value.ForString(text)
                     }
                 }
-                // Note: Removed outputDimensionality - let's test default behavior
             };
 
-            var json = JsonSerializer.Serialize(request);
-            _logger.LogInformation("📤 Sending Gemini API request to gemini-embedding-001:embedContent");
-
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            // Correct endpoint
-            var response = await _httpClient.PostAsync("models/gemini-embedding-001:embedContent", content);
-
-            _logger.LogInformation("📨 Received response with status: {StatusCode}", response.StatusCode);
-
-            if (!response.IsSuccessStatusCode)
+            var parameters = new Google.Protobuf.WellKnownTypes.Value
             {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogError("Gemini API error: {StatusCode} - {Error}", response.StatusCode, errorContent);
-                throw new HttpRequestException($"Gemini API failed: {response.StatusCode} - {errorContent}");
+                StructValue = new Google.Protobuf.WellKnownTypes.Struct
+                {
+                    Fields =
+                    {
+                        ["outputDimensionality"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(_embeddingDimension)
+                    }
+                }
+            };
+
+            var request = new PredictRequest
+            {
+                EndpointAsEndpointName = endpoint,
+                Instances = { instance },
+                Parameters = parameters
+            };
+
+            // Call Vertex AI
+            var response = await _predictionClient.PredictAsync(request);
+
+            if (response.Predictions.Count == 0)
+            {
+                _logger.LogError("No predictions returned from Vertex AI");
+                throw new InvalidOperationException("No embeddings returned from Vertex AI");
             }
 
-            var jsonResponse = await response.Content.ReadAsStringAsync();
+            // Extract embedding values
+            var prediction = response.Predictions[0];
+            var embeddingsField = prediction.StructValue.Fields["embeddings"];
+            var valuesField = embeddingsField.StructValue.Fields["values"];
 
-            using var doc = JsonDocument.Parse(jsonResponse);
+            var embedding = valuesField.ListValue.Values
+                .Select(v => (float)v.NumberValue)
+                .ToArray();
 
-            // Convert to float[]
-            var embedding = doc.RootElement
-                              .GetProperty("embedding")
-                              .GetProperty("values")
-                              .EnumerateArray()
-                              .Select(x => x.GetSingle())
-                              .ToArray();
-
-            _logger.LogInformation("✅ Successfully generated embedding with {Dimensions} dimensions", embedding.Length);
+            _logger.LogInformation("✅ Successfully generated Vertex AI embedding with {Dimensions} dimensions", embedding.Length);
 
             // Validate dimensions
             if (embedding.Length != _embeddingDimension)
@@ -100,7 +129,7 @@ public class GeminiEmbeddingService : IEmbeddingService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to generate embedding for text: {Text}",
+            _logger.LogError(ex, "Failed to generate Vertex AI embedding for text: {Text}",
                 text.Length > 100 ? text.Substring(0, 100) + "..." : text);
             throw;
         }
@@ -183,7 +212,7 @@ public class GeminiEmbeddingService : IEmbeddingService
 
     public void Dispose()
     {
-        _httpClient?.Dispose();
+        // Vertex AI client handles its own disposal
     }
 }
 

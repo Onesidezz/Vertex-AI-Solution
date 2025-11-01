@@ -203,7 +203,7 @@
         /* Search Panel */
         .search-panel {
             background: #ffffff;
-            padding: 30px;
+            padding: 20px;
             border-bottom: 1px solid #e0e0e0;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
@@ -328,20 +328,21 @@
 
         /* Metadata Filters */
         .metadata-filters {
-            margin-top: 20px;
+            margin-top: 12px;
             border-top: 1px solid #e0e0e0;
-            padding-top: 20px;
+            padding-top: 12px;
         }
 
         .metadata-toggle {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             cursor: pointer;
             color: #143d78;
             font-weight: 500;
-            font-size: 14px;
-            margin-bottom: 15px;
+            font-size: 13px;
+            margin-top: 10px;
+            margin-bottom: 10px;
             user-select: none;
         }
 
@@ -491,7 +492,8 @@
         }
 
         /* Results Stats */
-        .results-stats {
+        /* Removed - stats now inline in AI summary title */
+        /*.results-stats {
             padding: 15px 20px;
             background: #f9f9f9;
             border-radius: 8px;
@@ -507,7 +509,7 @@
         .results-count {
             font-weight: 600;
             color: #2c3e50;
-        }
+        }*/
 
         /* Data Grid (OpenText style) */
         .csui-table-grid {
@@ -715,10 +717,10 @@
 
         /* AI Summary */
         .ai-summary-panel {
-            padding: 20px;
+            padding: 16px;
             background: #e3f2fd;
             border-left: 4px solid #143d78;
-            margin: 0 0 20px 0;
+            margin: 0 0 16px 0;
             border-radius: 8px;
             border: 1px solid #bbdefb;
         }
@@ -730,10 +732,32 @@
             margin-bottom: 12px;
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 6px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
+
+            .ai-summary-title > div:first-child {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+
+        .compact-stats {
+            font-size: 11px;
+            color: #666;
+            font-weight: 500;
+            text-transform: none;
+            letter-spacing: normal;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+            .compact-stats .stat-separator {
+                color: #ccc;
+            }
 
         .ai-summary-content {
             font-size: 14px;
@@ -856,7 +880,7 @@
             }
 
             .search-panel {
-                padding: 20px;
+                padding: 15px;
             }
 
             .search-form {
@@ -879,10 +903,10 @@
                 padding: 6px 12px;
             }
 
-            .results-stats {
+            /*.results-stats {
                 flex-direction: column;
                 gap: 10px;
-            }
+            }*/
 
             .csui-table-grid {
                 font-size: 12px;
@@ -899,6 +923,200 @@
             .overview-header h2 {
                 font-size: 22px;
             }
+        }
+
+        /* ACL Modal Styles */
+        .acl-modal {
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            overflow: auto;
+        }
+
+        .acl-modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 700px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: slideDown 0.3s ease;
+        }
+
+        @@keyframes slideDown {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .acl-modal-header {
+            padding: 20px 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .acl-modal-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .acl-modal-header i {
+            margin-right: 8px;
+        }
+
+        .acl-modal-close {
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+            transition: opacity 0.2s;
+        }
+
+        .acl-modal-close:hover {
+            opacity: 0.7;
+        }
+
+        .acl-modal-body {
+            padding: 25px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .acl-record-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .acl-record-info strong {
+            color: #667eea;
+            display: inline-block;
+            min-width: 80px;
+        }
+
+        .acl-permissions-table {
+            width: 100%;
+        }
+
+        .acl-permission-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+            transition: background 0.2s;
+        }
+
+        .acl-permission-row:hover {
+            background: #f8f9fa;
+        }
+
+        .acl-permission-row:last-child {
+            border-bottom: none;
+        }
+
+        .acl-permission-name {
+            font-weight: 600;
+            color: #495057;
+            display: flex;
+            align-items: center;
+        }
+
+        .acl-permission-name i {
+            margin-right: 8px;
+            color: #667eea;
+        }
+
+        .acl-permission-value {
+            color: #28a745;
+            font-weight: 500;
+            padding: 4px 12px;
+            background: #d4edda;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .acl-no-permissions {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6c757d;
+        }
+
+        .acl-no-permissions i {
+            font-size: 48px;
+            color: #dee2e6;
+            margin-bottom: 15px;
+        }
+
+        /* Send to Dropdown Styles */
+        .send-to-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            min-width: 180px;
+            margin-top: 5px;
+            animation: dropdownSlideDown 0.2s ease;
+        }
+
+        @@keyframes dropdownSlideDown {
+            from {
+                transform: translateY(-10px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .send-to-option {
+            padding: 12px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #333;
+            transition: all 0.2s;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .send-to-option:last-child {
+            border-bottom: none;
+        }
+
+        .send-to-option:hover {
+            background: #f5f5f5;
+            color: #0078d4;
+        }
+
+        .send-to-option i {
+            font-size: 18px;
+        }
+
+        .send-to-option:hover i {
+            color: #0078d4;
         }
     </style>
 </head>
@@ -998,6 +1216,7 @@
         <!-- Search Panel -->
     <div class="search-panel">
         <form method="post" id="searchForm" class="search-form">
+            <input type="hidden" id="useAdvancedFilter" name="useAdvancedFilter" value="@(ViewBag.UseAdvancedFilter == true ? "true" : "false")">
             <div class="search-box">
                 <i class="bi bi-search search-icon"></i>
                 <input type="text"
@@ -1005,8 +1224,7 @@
                        id="query"
                        name="query"
                        placeholder="Search records, documents, or content..."
-                       value="@ViewBag.Query"
-                       required>
+                       value="@ViewBag.Query">
             </div>
             <div class="filter-group">
                 <span class="filter-label">Results:</span>
@@ -1018,6 +1236,14 @@
                 <input type="number" class="filter-input" id="minimumScore" name="minimumScore"
                        step="0.1" min="0" max="1" value="@(ViewBag.MinimumScore ?? 0.3)">
             </div>
+            <!-- Hidden inputs for advanced filters (will be populated by JavaScript) -->
+            <input type="hidden" id="hiddenUri" name="uri" value="@ViewBag.AdvancedFilterUri">
+            <input type="hidden" id="hiddenClientId" name="clientId" value="@ViewBag.AdvancedFilterClientId">
+            <input type="hidden" id="hiddenTitle" name="title" value="@ViewBag.AdvancedFilterTitle">
+            <input type="hidden" id="hiddenDateFrom" name="dateFrom" value="@ViewBag.AdvancedFilterDateFrom">
+            <input type="hidden" id="hiddenDateTo" name="dateTo" value="@ViewBag.AdvancedFilterDateTo">
+            <input type="hidden" id="hiddenContentSearch" name="contentSearch" value="@ViewBag.AdvancedFilterContentSearch">
+
             <button type="submit" class="btn-search">
                 <i class="bi bi-search"></i> Search
             </button>
@@ -1026,7 +1252,7 @@
             </button>
         </form>
 
-        <!-- Metadata Filters -->
+        <!-- Metadata Filters (outside form for styling) -->
         <div class="metadata-filters">
             <div class="metadata-toggle" onclick="toggleMetadataFields()">
                 <i class="bi bi-chevron-right"></i>
@@ -1035,32 +1261,32 @@
             <div class="metadata-fields" id="metadataFields">
                 <div class="metadata-field">
                     <label for="uri">URI</label>
-                    <input type="text" id="uri" name="uri" placeholder="Enter URI">
+                    <input type="text" id="uri" placeholder="Enter URI">
                 </div>
 
                 <div class="metadata-field">
                     <label for="clientId">Client ID</label>
-                    <input type="text" id="clientId" name="clientId" placeholder="Enter Client ID">
+                    <input type="text" id="clientId" placeholder="Enter Client ID">
                 </div>
 
                 <div class="metadata-field">
                     <label for="title">Title</label>
-                    <input type="text" id="title" name="title" placeholder="Enter title">
+                    <input type="text" id="title" placeholder="Enter title">
                 </div>
 
                 <div class="metadata-field">
                     <label for="dateFrom">Date From</label>
-                    <input type="date" id="dateFrom" name="dateFrom">
+                    <input type="date" id="dateFrom">
                 </div>
 
                 <div class="metadata-field">
                     <label for="dateTo">Date To</label>
-                    <input type="date" id="dateTo" name="dateTo">
+                    <input type="date" id="dateTo">
                 </div>
 
                 <div class="metadata-field">
                     <label for="contentSearch">Content Search</label>
-                    <input type="text" id="contentSearch" name="contentSearch" placeholder="Enter content search">
+                    <input type="text" id="contentSearch" placeholder="Enter content search">
                 </div>
             </div>
         </div>
@@ -1068,23 +1294,20 @@
 
     @if (searchResults != null)
     {
-        <!-- Results Stats -->
-        <div class="results-stats">
-            <div class="results-count">
-                @searchResults.TotalResults item@(searchResults.TotalResults != 1 ? "s" : "")
-            </div>
-            <div>
-                Query time: @searchResults.QueryTime.ToString("F3")s
-            </div>
-        </div>
-
         <!-- AI Summary -->
         @if (!string.IsNullOrWhiteSpace(searchResults.SynthesizedAnswer))
         {
             <div class="ai-summary-panel">
                 <div class="ai-summary-title">
-                    <i class="bi bi-stars"></i>
-                    AI Generated Summary
+                    <div>
+                        <i class="bi bi-stars"></i>
+                        AI Generated Summary
+                    </div>
+                    <div class="compact-stats">
+                        <span>@searchResults.TotalResults item@(searchResults.TotalResults != 1 ? "s" : "")</span>
+                        <span class="stat-separator">•</span>
+                        <span>@searchResults.QueryTime.ToString("F2")s</span>
+                    </div>
                 </div>
                 <div class="ai-summary-content ai-answer-text">
                     @searchResults.SynthesizedAnswer
@@ -1103,25 +1326,29 @@
                 <i class="bi bi-folder2-open"></i>
                 <span>Open</span>
             </div>
-            <div class="toolbar-item">
-                <i class="bi bi-link-45deg"></i>
-                <span>Copy link</span>
-            </div>
-            <div class="toolbar-item">
+            <div class="toolbar-item" id="sendToBtn" style="opacity: 0.5; cursor: not-allowed; position: relative;">
                 <i class="bi bi-send"></i>
                 <span>Send to</span>
             </div>
-            <div class="toolbar-item">
+            <div class="toolbar-item" id="viewPermissionsBtn" style="opacity: 0.5; cursor: not-allowed;">
                 <i class="bi bi-shield-check"></i>
                 <span>View permissions</span>
             </div>
-            <div class="toolbar-item">
-                <i class="bi bi-files"></i>
-                <span>Copy</span>
-            </div>
-            <div class="toolbar-item">
+            <div class="toolbar-item" id="downloadBtn" style="opacity: 0.5; cursor: not-allowed;">
                 <i class="bi bi-download"></i>
                 <span>Download</span>
+            </div>
+        </div>
+
+        <!-- Send to Dropdown Menu -->
+        <div id="sendToDropdown" class="send-to-dropdown" style="display: none;">
+            <div class="send-to-option" id="sendToOutlook">
+                <i class="bi bi-envelope"></i>
+                <span>Outlook</span>
+            </div>
+            <div class="send-to-option" id="sendToTeams">
+                <i class="bi bi-microsoft-teams"></i>
+                <span>Teams</span>
             </div>
         </div>
 
@@ -1152,7 +1379,10 @@
                         {
                             <tr>
                                 <td class="col-checkbox">
-                                    <input type="checkbox" class="row-checkbox">
+                                    <input type="checkbox" class="row-checkbox"
+                                           data-uri="@result.RecordUri"
+                                           data-title="@result.RecordTitle"
+                                           data-acl='@Html.Raw(result.ACL ?? "null")'>
                                 </td>
                                 <td>
                                     @if (result.RecordType == "Container")
@@ -1218,6 +1448,23 @@
     </div>
     <!-- End Search Content -->
 
+    <!-- ACL Permissions Modal -->
+    <div id="aclModal" class="acl-modal" style="display: none;">
+        <div class="acl-modal-content">
+            <div class="acl-modal-header">
+                <h3><i class="bi bi-shield-check"></i> Access Control Permissions</h3>
+                <span class="acl-modal-close">&times;</span>
+            </div>
+            <div class="acl-modal-body">
+                <div id="aclRecordInfo" class="acl-record-info"></div>
+                <div id="aclPermissionsTable" class="acl-permissions-table"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
     <script>
         // Toggle metadata fields
         function toggleMetadataFields() {
@@ -1227,6 +1474,84 @@
             fields.classList.toggle('show');
             toggle.classList.toggle('expanded');
         }
+
+        // On page load, check if advanced filters were used and restore state
+        $(document).ready(function() {
+            const useAdvancedFilter = $('#useAdvancedFilter').val() === 'true';
+
+            if (useAdvancedFilter) {
+                // Get values from hidden inputs
+                const uriValue = $('#hiddenUri').val();
+                const clientIdValue = $('#hiddenClientId').val();
+                const titleValue = $('#hiddenTitle').val();
+                const dateFromValue = $('#hiddenDateFrom').val();
+                const dateToValue = $('#hiddenDateTo').val();
+                const contentSearchValue = $('#hiddenContentSearch').val();
+
+                // Check if any advanced filter value exists
+                const hasValues = uriValue || clientIdValue || titleValue || dateFromValue || dateToValue || contentSearchValue;
+
+                if (hasValues) {
+                    // Populate visible fields with values
+                    $('#uri').val(uriValue || '');
+                    $('#clientId').val(clientIdValue || '');
+                    $('#title').val(titleValue || '');
+                    $('#dateFrom').val(dateFromValue || '');
+                    $('#dateTo').val(dateToValue || '');
+                    $('#contentSearch').val(contentSearchValue || '');
+
+                    // Open the advanced filters section
+                    const fields = document.getElementById('metadataFields');
+                    const toggle = document.querySelector('.metadata-toggle');
+                    fields.classList.add('show');
+                    toggle.classList.add('expanded');
+                }
+            }
+        });
+
+        // Check if advanced filters have values and set flag before form submission (using jQuery)
+        $('#searchForm').on('submit', function(e) {
+            const queryValue = $('#query').val();
+
+            // Get values from visible advanced filter fields
+            const uriValue = $('#uri').val();
+            const clientIdValue = $('#clientId').val();
+            const titleValue = $('#title').val();
+            const dateFromValue = $('#dateFrom').val();
+            const dateToValue = $('#dateTo').val();
+            const contentSearchValue = $('#contentSearch').val();
+
+            const advancedFields = [
+                uriValue,
+                clientIdValue,
+                titleValue,
+                dateFromValue,
+                dateToValue,
+                contentSearchValue
+            ];
+
+            // Check if any advanced filter field has a value
+            const hasAdvancedFilters = advancedFields.some(val => val && val.trim() !== '');
+            const hasQuery = queryValue && queryValue.trim() !== '';
+
+            // Validate: At least one field (query OR advanced filter) must be filled
+            if (!hasQuery && !hasAdvancedFilters) {
+                e.preventDefault();
+                alert('Please enter a search query OR fill in at least one advanced filter field.');
+                return false;
+            }
+
+            // Copy values from visible fields to hidden fields inside form
+            $('#hiddenUri').val(uriValue || '');
+            $('#hiddenClientId').val(clientIdValue || '');
+            $('#hiddenTitle').val(titleValue || '');
+            $('#hiddenDateFrom').val(dateFromValue || '');
+            $('#hiddenDateTo').val(dateToValue || '');
+            $('#hiddenContentSearch').val(contentSearchValue || '');
+
+            // Set the advanced filter flag
+            $('#useAdvancedFilter').val(hasAdvancedFilters ? 'true' : 'false');
+        });
 
         // Clear search function
         function clearSearch() {
@@ -1242,6 +1567,21 @@
             document.getElementById('dateFrom').value = '';
             document.getElementById('dateTo').value = '';
             document.getElementById('contentSearch').value = '';
+
+            // Clear hidden inputs
+            document.getElementById('hiddenUri').value = '';
+            document.getElementById('hiddenClientId').value = '';
+            document.getElementById('hiddenTitle').value = '';
+            document.getElementById('hiddenDateFrom').value = '';
+            document.getElementById('hiddenDateTo').value = '';
+            document.getElementById('hiddenContentSearch').value = '';
+            document.getElementById('useAdvancedFilter').value = 'false';
+
+            // Collapse advanced filters section
+            const fields = document.getElementById('metadataFields');
+            const toggle = document.querySelector('.metadata-toggle');
+            fields.classList.remove('show');
+            toggle.classList.remove('expanded');
 
             // Reload page to clear results
             window.location.href = '/Search';
@@ -1321,6 +1661,450 @@
         function escapeRegex(string) {
             return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
+
+        // ACL Permissions functionality
+        $(document).ready(function() {
+            // Handle checkbox selection
+            $('.row-checkbox').on('change', function() {
+                updateSelectedCount();
+                updateViewPermissionsButton();
+                updateDownloadButton();
+                updateSendToButton();
+            });
+
+            // Handle select all checkbox
+            $('#selectAll').on('change', function() {
+                $('.row-checkbox').prop('checked', $(this).is(':checked'));
+                updateSelectedCount();
+                updateViewPermissionsButton();
+                updateDownloadButton();
+                updateSendToButton();
+            });
+
+            // Update selected count display
+            function updateSelectedCount() {
+                const selectedCount = $('.row-checkbox:checked').length;
+                $('.toolbar-item.selected span:last-child').text(selectedCount);
+            }
+
+            // Enable/disable View Permissions button
+            function updateViewPermissionsButton() {
+                const selectedCount = $('.row-checkbox:checked').length;
+                const btn = $('#viewPermissionsBtn');
+
+                if (selectedCount > 0) {
+                    btn.css({
+                        'opacity': '1',
+                        'cursor': 'pointer'
+                    });
+                    btn.attr('data-enabled', 'true');
+                } else {
+                    btn.css({
+                        'opacity': '0.5',
+                        'cursor': 'not-allowed'
+                    });
+                    btn.removeAttr('data-enabled');
+                }
+            }
+
+            // Enable/disable Download button
+            function updateDownloadButton() {
+                const selectedCount = $('.row-checkbox:checked').length;
+                const btn = $('#downloadBtn');
+
+                if (selectedCount > 0) {
+                    btn.css({
+                        'opacity': '1',
+                        'cursor': 'pointer'
+                    });
+                    btn.attr('data-enabled', 'true');
+                } else {
+                    btn.css({
+                        'opacity': '0.5',
+                        'cursor': 'not-allowed'
+                    });
+                    btn.removeAttr('data-enabled');
+                }
+            }
+
+            // Enable/disable Send To button
+            function updateSendToButton() {
+                const selectedCount = $('.row-checkbox:checked').length;
+                const btn = $('#sendToBtn');
+
+                if (selectedCount > 0) {
+                    btn.css({
+                        'opacity': '1',
+                        'cursor': 'pointer'
+                    });
+                    btn.attr('data-enabled', 'true');
+                } else {
+                    btn.css({
+                        'opacity': '0.5',
+                        'cursor': 'not-allowed'
+                    });
+                    btn.removeAttr('data-enabled');
+                    $('#sendToDropdown').hide();
+                }
+            }
+
+            // View Permissions button click
+            $('#viewPermissionsBtn').on('click', function() {
+                if ($(this).attr('data-enabled') !== 'true') {
+                    return;
+                }
+
+                const selectedCheckboxes = $('.row-checkbox:checked');
+                if (selectedCheckboxes.length === 0) {
+                    return;
+                }
+
+                // For now, show only the first selected record's permissions
+                const firstCheckbox = selectedCheckboxes.first();
+                const uri = firstCheckbox.data('uri');
+                const title = firstCheckbox.data('title');
+                const aclData = firstCheckbox.data('acl');
+
+                showACLModal(uri, title, aclData);
+            });
+
+            // Show ACL Modal
+            function showACLModal(uri, title, aclData) {
+                const modal = $('#aclModal');
+                const recordInfo = $('#aclRecordInfo');
+                const permissionsTable = $('#aclPermissionsTable');
+
+                // Set record info
+                recordInfo.html(`
+                    <div><strong>Record URI:</strong> ${uri}</div>
+                    <div><strong>Title:</strong> ${title}</div>
+                `);
+
+                // Parse and display ACL permissions
+                if (aclData && aclData !== 'null') {
+                    try {
+                        const acl = typeof aclData === 'string' ? JSON.parse(aclData) : aclData;
+
+                        if (acl && acl.Permissions) {
+                            let permissionsHtml = '';
+                            const iconMap = {
+                                'ViewDocument': 'bi-eye',
+                                'ViewMetadata': 'bi-info-circle',
+                                'UpdateDocument': 'bi-pencil-square',
+                                'UpdateMetadata': 'bi-pencil',
+                                'ModifyAccess': 'bi-shield-lock',
+                                'DestroyRecord': 'bi-trash',
+                                'ContributeContents': 'bi-plus-circle'
+                            };
+
+                            for (const [permission, value] of Object.entries(acl.Permissions)) {
+                                const icon = iconMap[permission] || 'bi-check-circle';
+                                permissionsHtml += `
+                                    <div class="acl-permission-row">
+                                        <div class="acl-permission-name">
+                                            <i class="bi ${icon}"></i>
+                                            ${permission.replace(/([A-Z])/g, ' $1').trim()}
+                                        </div>
+                                        <div class="acl-permission-value">${value}</div>
+                                    </div>
+                                `;
+                            }
+                            permissionsTable.html(permissionsHtml);
+                        } else {
+                            permissionsTable.html(`
+                                <div class="acl-no-permissions">
+                                    <i class="bi bi-shield-x"></i>
+                                    <p>No permissions data available</p>
+                                </div>
+                            `);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing ACL data:', e);
+                        permissionsTable.html(`
+                            <div class="acl-no-permissions">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                <p>Error loading permissions data</p>
+                            </div>
+                        `);
+                    }
+                } else {
+                    permissionsTable.html(`
+                        <div class="acl-no-permissions">
+                            <i class="bi bi-shield-x"></i>
+                            <p>No permissions data available for this record</p>
+                        </div>
+                    `);
+                }
+
+                // Show modal
+                modal.fadeIn(200);
+            }
+
+            // Close modal
+            $('.acl-modal-close').on('click', function() {
+                $('#aclModal').fadeOut(200);
+            });
+
+            // Close modal when clicking outside
+            $(window).on('click', function(event) {
+                if ($(event.target).hasClass('acl-modal')) {
+                    $('#aclModal').fadeOut(200);
+                }
+            });
+
+            // Download button click
+            $('#downloadBtn').on('click', function() {
+                if ($(this).attr('data-enabled') !== 'true') {
+                    return;
+                }
+
+                const selectedCheckboxes = $('.row-checkbox:checked');
+                if (selectedCheckboxes.length === 0) {
+                    return;
+                }
+
+                // Collect all selected record URIs
+                const recordUris = [];
+                selectedCheckboxes.each(function() {
+                    const uri = $(this).data('uri');
+                    if (uri) {
+                        recordUris.push(uri);
+                    }
+                });
+
+                if (recordUris.length === 0) {
+                    alert('No valid records selected for download');
+                    return;
+                }
+
+                // Show loading indicator
+                const btn = $('#downloadBtn');
+                const originalHtml = btn.html();
+                btn.html('<i class="bi bi-hourglass-split"></i> <span>Downloading...</span>');
+                btn.css('pointer-events', 'none');
+
+                // Send download request
+                fetch('/DownloadMultiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(recordUris)
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(data => {
+                            throw new Error(data.message || 'Download failed');
+                        });
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    // Create download link
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = `Records_${new Date().toISOString().slice(0, 10)}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+
+                    // Reset button
+                    btn.html(originalHtml);
+                    btn.css('pointer-events', 'auto');
+                })
+                .catch(error => {
+                    console.error('Download error:', error);
+                    alert('Download failed: ' + error.message);
+
+                    // Reset button
+                    btn.html(originalHtml);
+                    btn.css('pointer-events', 'auto');
+                });
+            });
+
+            // Send To button click - toggle dropdown
+            $('#sendToBtn').on('click', function(e) {
+                if ($(this).attr('data-enabled') !== 'true') {
+                    return;
+                }
+                e.stopPropagation();
+
+                const dropdown = $('#sendToDropdown');
+                const btnOffset = $(this).offset();
+                const btnHeight = $(this).outerHeight();
+
+                // Position dropdown below the button
+                dropdown.css({
+                    'position': 'fixed',
+                    'top': btnOffset.top + btnHeight + 'px',
+                    'left': btnOffset.left + 'px'
+                });
+
+                dropdown.toggle();
+            });
+
+            // Send to Outlook
+            $('#sendToOutlook').on('click', function() {
+                const selectedCheckboxes = $('.row-checkbox:checked');
+                if (selectedCheckboxes.length === 0) {
+                    return;
+                }
+
+                // Collect selected records information
+                const records = [];
+                selectedCheckboxes.each(function() {
+                    const uri = $(this).data('uri');
+                    const title = $(this).data('title');
+                    if (uri && title) {
+                        records.push({ uri: uri, title: title });
+                    }
+                });
+
+                if (records.length === 0) {
+                    alert('No valid records selected');
+                    return;
+                }
+
+                // Build email body with record information
+                let emailBody = 'Selected Records:%0D%0A%0D%0A';
+                records.forEach(record => {
+                    emailBody += `Record URI: ${record.uri}%0D%0A`;
+                    emailBody += `Title: ${record.title}%0D%0A`;
+                    emailBody += `Link: ${window.location.origin}/Download/${record.uri}%0D%0A%0D%0A`;
+                });
+
+                // Create mailto link
+                const subject = `Content Manager Records (${records.length} selected)`;
+                const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${emailBody}`;
+
+                // Open default email client
+                window.location.href = mailtoLink;
+
+                // Hide dropdown
+                $('#sendToDropdown').hide();
+            });
+
+            // Send to Teams
+            $('#sendToTeams').on('click', function() {
+                const selectedCheckboxes = $('.row-checkbox:checked');
+                console.log('Teams: Selected checkboxes count:', selectedCheckboxes.length);
+
+                if (selectedCheckboxes.length === 0) {
+                    return;
+                }
+
+                // Collect selected records information
+                const records = [];
+                selectedCheckboxes.each(function() {
+                    const uri = $(this).data('uri');
+                    const title = $(this).data('title');
+                    console.log('Teams: Processing record - URI:', uri, 'Title:', title);
+                    if (uri && title) {
+                        records.push({ uri: uri, title: title });
+                    }
+                });
+
+                console.log('Teams: Total records collected:', records.length);
+                console.log('Teams: Records array:', records);
+
+                if (records.length === 0) {
+                    alert('No valid records selected');
+                    return;
+                }
+
+                // Build message text for Teams - SIMPLE format
+                let messageText = `Selected Records (${records.length}):\n\n`;
+                records.forEach(record => {
+                    messageText += `Record URI: ${record.uri}\n`;
+                    messageText += `Title: ${record.title}\n`;
+                    messageText += `Link: ${window.location.origin}/Download/${record.uri}\n\n`;
+                });
+
+                console.log('Teams: Final message text length:', messageText.length);
+                console.log('Teams: Final message text:', messageText);
+
+                // Copy message to clipboard using modern Clipboard API with fallback
+                const copyToClipboard = async (text) => {
+                    console.log('Teams: copyToClipboard called with text length:', text.length);
+                    console.log('Teams: Text to copy:', text);
+
+                    // Try modern Clipboard API first
+                    if (navigator.clipboard && window.isSecureContext) {
+                        try {
+                            await navigator.clipboard.writeText(text);
+                            console.log('Teams: Successfully copied using modern Clipboard API');
+
+                            // Verify what was copied
+                            const copiedText = await navigator.clipboard.readText();
+                            console.log('Teams: Verified clipboard content length:', copiedText.length);
+                            console.log('Teams: Verified clipboard content:', copiedText);
+
+                            return true;
+                        } catch (err) {
+                            console.warn('Modern clipboard API failed, trying fallback:', err);
+                        }
+                    }
+
+                    // Fallback to execCommand
+                    console.log('Teams: Using execCommand fallback');
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+
+                    console.log('Teams: Textarea value length:', textarea.value.length);
+
+                    try {
+                        const success = document.execCommand('copy');
+                        console.log('Teams: execCommand copy result:', success);
+                        document.body.removeChild(textarea);
+                        return success;
+                    } catch (err) {
+                        document.body.removeChild(textarea);
+                        console.error('Fallback copy failed:', err);
+                        return false;
+                    }
+                };
+
+                // Copy to clipboard and open Teams
+                copyToClipboard(messageText).then(success => {
+                    console.log('Teams: Copy operation completed, success:', success);
+                    if (success) {
+                        // Show immediate notification
+                        alert('✓ ' + records.length + ' record(s) copied to clipboard!\n\n' +
+                              'Opening Teams - Paste with Ctrl+V');
+
+                        // Wait a moment for clipboard to fully persist, then open Teams
+                        setTimeout(() => {
+                            try {
+                                window.location.href = 'ms-teams:';
+                            } catch (err) {
+                                console.error('Failed to open Teams:', err);
+                                window.open('https://teams.microsoft.com', '_blank');
+                            }
+                        }, 100);
+
+                    } else {
+                        alert('Failed to copy to clipboard.');
+                    }
+                });
+
+                // Hide dropdown
+                $('#sendToDropdown').hide();
+            });
+
+            // Close dropdown when clicking outside
+            $(document).on('click', function(e) {
+                if (!$(e.target).closest('#sendToBtn').length && !$(e.target).closest('#sendToDropdown').length) {
+                    $('#sendToDropdown').hide();
+                }
+            });
+        });
     </script>
 </body>
 </html>

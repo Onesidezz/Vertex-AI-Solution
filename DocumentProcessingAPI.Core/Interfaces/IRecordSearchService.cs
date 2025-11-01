@@ -15,6 +15,13 @@ namespace DocumentProcessingAPI.Core.Interfaces
             string query,
             Dictionary<string, object>? metadataFilters = null,
             int topK = 20,
-            float minimumScore = 0.3f);
+            float minimumScore = 0.3f,
+            bool useAdvancedFilter = false,
+            string? uri = null,
+            string? clientId = null,
+            string? title = null,
+            DateTime? dateFrom = null,
+            DateTime? dateTo = null,
+            string? contentSearch = null);
     }
 }

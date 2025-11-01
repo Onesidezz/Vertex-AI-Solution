@@ -35,93 +35,69 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             _contentManagerServices = contentManagerServices;
         }
 
-        /// <summary>
-        /// Search records by natural language query with optional metadata filters
-        /// Enhanced with better error handling, validation, and dynamic query processing
-        ///
-        /// Example queries:
-        ///
-        /// SPECIFIC DATES:
-        /// - "get me records created on 22-10-2024"
-        /// - "records created today"
-        /// - "documents from yesterday"
-        /// - "files created on October 9, 2025"
-        ///
-        /// DATE RANGES:
-        /// - "Show me all documents created after October 9, 2025"
-        /// - "documents before January 1, 2024"
-        /// - "records from last week"
-        /// - "files from last 7 days"
-        /// - "documents from last 3 months"
-        /// - "records from last 2 years"
-        ///
-        /// WEEKS:
-        /// - "records from this week"
-        /// - "documents from week 1"
-        /// - "files from week 42 of 2024"
-        /// - "records from the week of October 3"
-        /// - "documents from last 4 weeks"
-        ///
-        /// MONTHS:
-        /// - "records from this month"
-        /// - "documents from last month"
-        /// - "files from October 2024"
-        /// - "records from last October"
-        /// - "documents from September"
-        /// - "files from last 6 months"
-        ///
-        /// YEARS:
-        /// - "records from this year"
-        /// - "documents from last year"
-        /// - "files from 2024"
-        /// - "records from year 2023"
-        /// - "documents from last 2 years"
-        ///
-        /// QUARTERS:
-        /// - "records from Q1 2024"
-        /// - "documents from Q2"
-        /// - "files from first quarter"
-        /// - "records from second quarter 2023"
-        /// - "documents from fourth quarter"
-        ///
-        /// SORTING:
-        /// - "Which record has the earliest creation date?"
-        /// - "What are the most recently created documents?"
-        /// - "Show me the latest files"
-        /// - "Find the oldest records"
-        ///
-        /// TIME-BASED:
-        /// - "List all Word or Excel documents added after 3:45 PM"
-        /// - "documents created after 15:30"
-        ///
-        /// COMBINED QUERIES:
-        /// - "What are the most recently created documents related to API or Service?"
-        /// - "invoice details of Umar khan from last month"
-        /// - "Excel files from Q1 2024"
-        /// - "Word documents created in October 2024"
-        /// </summary>
+
         public async Task<RecordSearchResponseDto> SearchRecordsAsync(
             string query,
             Dictionary<string, object>? metadataFilters = null,
             int topK = 20,
-            float minimumScore = 0.3f)
+            float minimumScore = 0.3f,
+            bool useAdvancedFilter = false,
+            string? uri = null,
+            string? clientId = null,
+            string? title = null,
+            DateTime? dateFrom = null,
+            DateTime? dateTo = null,
+            string? contentSearch = null)
         {
             var stopwatch = Stopwatch.StartNew();
 
             try
             {
                 // Input validation
-                if (string.IsNullOrWhiteSpace(query))
+                if (string.IsNullOrWhiteSpace(query) && !useAdvancedFilter)
                 {
-                    _logger.LogWarning("Empty or null query provided");
+                    _logger.LogWarning("Empty or null query provided and no advanced filters");
                     return new RecordSearchResponseDto
                     {
                         Query = query ?? "",
                         Results = new List<RecordSearchResultDto>(),
                         TotalResults = 0,
                         QueryTime = 0,
-                        SynthesizedAnswer = "Please provide a search query."
+                        SynthesizedAnswer = "Please provide a search query or use advanced filters."
                     };
+                }
+
+                // Check if using advanced filters only (no semantic search needed)
+                if (useAdvancedFilter)
+                {
+                    // Check if any advanced filter input is provided
+                    bool hasAdvancedFilterInputs = !string.IsNullOrWhiteSpace(uri) ||
+                                                   !string.IsNullOrWhiteSpace(clientId) ||
+                                                   !string.IsNullOrWhiteSpace(title) ||
+                                                   dateFrom.HasValue ||
+                                                   dateTo.HasValue ||
+                                                   !string.IsNullOrWhiteSpace(contentSearch);
+
+                    if (hasAdvancedFilterInputs)
+                    {
+                        // Route to dedicated advanced filter search function
+                        _logger.LogInformation("Routing to advanced filter search (no semantic search)");
+                        return await ExecuteContentManagerAdvanceFilterAsync(
+                            uri,
+                            clientId,
+                            title,
+                            dateFrom,
+                            dateTo,
+                            contentSearch,
+                            topK);
+                    }
+                }
+
+                // If using advanced filter only, set query to a default value for logging
+                if (string.IsNullOrWhiteSpace(query) && useAdvancedFilter)
+                {
+                    query = "[Advanced Filter Search]";
+                    _logger.LogInformation("Using advanced filter only mode");
                 }
 
                 // Validate and normalize parameters
@@ -210,10 +186,11 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var keywordList = extractedKeywords.Any() ? extractedKeywords : new List<string>();
 
                 // Check if we should use CM Index search
-                // Use it if we have dates, content, or file type filters
+                // Use it if we have dates, content, file type filters, or advanced filters (especially uri)
                 var shouldUseCMSearch = startDate.HasValue || endDate.HasValue ||
                                        !string.IsNullOrWhiteSpace(contentQuery) ||
-                                       fileTypeFilters.Any();
+                                       fileTypeFilters.Any() ||
+                                       (useAdvancedFilter && !string.IsNullOrWhiteSpace(uri));
 
                 if (shouldUseCMSearch)
                 {
@@ -221,13 +198,17 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     {
                         // Execute CM IDOL index search with separate parameters
                         // SetSearchString can only accept ONE field at a time
-                        // Returns both URIs and record details (Title, DateCreated, etc.)
-                        (candidateRecordUris, recordDetails) = await ExecuteContentManagerSearchAsync(
+                        // Returns ContentManagerSearchResultDto containing URIs and record details
+                        var cmSearchResult = await ExecuteContentManagerSearchAsync(
                             contentQuery,
                             startDate,
                             endDate,
                             fileTypeFilters,
-                            keywordList);
+                            keywordList,
+                            useAdvancedFilter ? uri : null);
+
+                        candidateRecordUris = cmSearchResult.CandidateRecordUris;
+                        recordDetails = cmSearchResult.RecordDetails;
 
                         _logger.LogInformation("   ✅ CM Index returned {Count} candidate records with details",
                             candidateRecordUris?.Count ?? 0);
@@ -470,7 +451,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var synthesizedAnswer = "";
                 try
                 {
-                   // synthesizedAnswer = await SynthesizeRecordAnswerAsync(query, searchResults);
+                    synthesizedAnswer = await SynthesizeRecordAnswerAsync(query, searchResults);
                 }
                 catch (Exception ex)
                 {
@@ -2407,32 +2388,36 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             contextBuilder.AppendLine("==================");
             contextBuilder.AppendLine();
             contextBuilder.AppendLine("IMPORTANT NOTES:");
-            contextBuilder.AppendLine("- The content above may contain OCR scanning artifacts (extra spaces, broken words, garbled text)");
-            contextBuilder.AppendLine("- Your task is to interpret the content intelligently and present it in clean, readable format");
+            contextBuilder.AppendLine("- Content may contain OCR artifacts - interpret intelligently and fix errors");
+            contextBuilder.AppendLine("- Answer must be COMPACT, CONTEXTUAL, and POINT-TO-POINT");
             contextBuilder.AppendLine();
             contextBuilder.AppendLine("INSTRUCTIONS:");
-            contextBuilder.AppendLine("1. INTERPRET & CLEAN:");
-            contextBuilder.AppendLine("   - Automatically fix OCR errors (e.g., 'ServiceAP I' → 'ServiceAPI', 'II S' → 'IIS')");
-            contextBuilder.AppendLine("   - Reconstruct broken words (e.g., 'Micro Focusoroneofits' → 'Micro Focus or one of its')");
-            contextBuilder.AppendLine("   - Remove page markers like '[END PAGE X]'");
-            contextBuilder.AppendLine("   - Fix spacing issues in technical terms (API, SDK, XML, JSON, SQL, HTTP, etc.)");
+            contextBuilder.AppendLine("1. ANSWER FORMAT:");
+            contextBuilder.AppendLine("   - Provide direct, point-to-point answers to the question");
+            contextBuilder.AppendLine("   - Keep it compact (2-4 sentences max for summary)");
+            contextBuilder.AppendLine("   - Include actual context from records, not generic responses");
+            contextBuilder.AppendLine("   - Use bullet points for listing multiple items");
             contextBuilder.AppendLine();
-            contextBuilder.AppendLine("2. FORMAT PROFESSIONALLY:");
-            contextBuilder.AppendLine("   - Use clear markdown formatting (headers, bullet points, code blocks)");
-            contextBuilder.AppendLine("   - Organize content into logical sections");
-            contextBuilder.AppendLine("   - Make technical documentation easy to read");
+            contextBuilder.AppendLine("2. CONTENT HANDLING:");
+            contextBuilder.AppendLine("   - Fix OCR errors automatically (e.g., 'ServiceAP I' → 'ServiceAPI')");
+            contextBuilder.AppendLine("   - Extract ONLY the most relevant information");
+            contextBuilder.AppendLine("   - Skip unnecessary details unless directly related to the query");
             contextBuilder.AppendLine();
-            contextBuilder.AppendLine("3. BE COMPREHENSIVE:");
-            contextBuilder.AppendLine("   - List ALL relevant records with URIs and titles");
-            contextBuilder.AppendLine("   - Include key metadata (dates, types, etc.)");
-            contextBuilder.AppendLine("   - Extract and present the most important information from the content");
+            contextBuilder.AppendLine("3. RECORD REFERENCES:");
+            contextBuilder.AppendLine("   - List relevant records with: Record URI, Title (keep it brief)");
+            contextBuilder.AppendLine("   - Only include records that directly answer the query");
+            contextBuilder.AppendLine("   - Skip records that are marginally relevant");
             contextBuilder.AppendLine();
-            contextBuilder.AppendLine("4. BE ACCURATE:");
-            contextBuilder.AppendLine("   - Don't invent information not present in the records");
-            contextBuilder.AppendLine("   - If content is unclear due to OCR errors, use your best interpretation");
-            contextBuilder.AppendLine("   - Cite record URIs when referencing specific information");
+            contextBuilder.AppendLine("4. ACCURACY:");
+            contextBuilder.AppendLine("   - Only use information present in the records");
+            contextBuilder.AppendLine("   - If information is not found, say so directly");
             contextBuilder.AppendLine();
-            contextBuilder.AppendLine("ANSWER:");
+            contextBuilder.AppendLine("EXAMPLE COMPACT ANSWER:");
+            contextBuilder.AppendLine("Found 3 records about API configuration. The ServiceAPI uses JSON format with OAuth2 authentication. Key settings are stored in web.config.");
+            contextBuilder.AppendLine("- Record 12345: API Configuration Guide");
+            contextBuilder.AppendLine("- Record 67890: OAuth2 Setup Instructions");
+            contextBuilder.AppendLine();
+            contextBuilder.AppendLine("ANSWER (Be compact, contextual, and point-to-point):");
 
             var prompt = contextBuilder.ToString();
             return await CallGeminiModelAsync(prompt);
@@ -2686,13 +2671,14 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         /// - Use createdOn:{MM/dd/yyyy} for date search
         /// Reference pattern from ApplySequentialFilters
         /// </summary>
-        /// <returns>Tuple of (URIs, RecordDetailStrings) for query enhancement</returns>
-        private async Task<(HashSet<long> uris, List<string> recordDetails)> ExecuteContentManagerSearchAsync(
+        /// <returns>ContentManagerSearchResultDto containing URIs and RecordDetailStrings</returns>
+        private async Task<ContentManagerSearchResultDto> ExecuteContentManagerSearchAsync(
             string contentQuery,
             DateTime? startDate,
             DateTime? endDate,
             List<string> fileTypeFilters,
-            List<string> keywordPhrases = null)
+            List<string> keywordPhrases = null,
+            string? uriFilter = null)
         {
             try
             {
@@ -2718,10 +2704,17 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
 
                 // IMPORTANT: SetSearchString can only accept ONE field at a time
-                // Priority: Date > Content > FileType
+                // Priority: URI > Date > Content > FileType
 
+                // Step 0: If we have a URI filter, use ONLY URI filter (highest priority)
+                if (!string.IsNullOrWhiteSpace(uriFilter))
+                {
+                    var uriStr = $"uri:{uriFilter}";
+                    search.SetSearchString(uriStr);
+                    _logger.LogInformation("   📋 Using URI filter: {UriFilter}", uriStr);
+                }
                 // Step 1: If we have a date, use ONLY date filter
-                if (startDate.HasValue || endDate.HasValue)
+                else if (startDate.HasValue || endDate.HasValue)
                 {
                     if (startDate.HasValue && endDate.HasValue && startDate.Value.Date == endDate.Value.Date)
                     {
@@ -2805,7 +2798,11 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 if (search.Count == 0)
                 {
                     _logger.LogInformation("   ℹ️ CM IDOL Index Search returned 0 results");
-                    return (candidateUris, recordDetails);
+                    return new ContentManagerSearchResultDto
+                    {
+                        CandidateRecordUris = candidateUris,
+                        RecordDetails = recordDetails
+                    };
                 }
 
                 // Iterate through search results and collect records with details
@@ -2843,12 +2840,225 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("   ✅ CM IDOL Index Search completed: Found {Count} unique record URIs with details",
                     candidateUris.Count);
 
-                return (candidateUris, recordDetails);
+                return new ContentManagerSearchResultDto
+                {
+                    CandidateRecordUris = candidateUris,
+                    RecordDetails = recordDetails
+                };
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "   ❌ Error executing CM IDOL Index search: {Message}", ex.Message);
                 throw; // Re-throw to let calling code handle fallback
+            }
+        }
+
+        /// <summary>
+        /// Execute Content Manager search using advanced filters only
+        /// This function handles searches that use metadata filters instead of semantic search
+        /// Returns complete RecordSearchResponseDto matching UI format
+        /// </summary>
+        private async Task<RecordSearchResponseDto> ExecuteContentManagerAdvanceFilterAsync(
+            string? uri = null,
+            string? clientId = null,
+            string? title = null,
+            DateTime? dateFrom = null,
+            DateTime? dateTo = null,
+            string? contentSearch = null,
+            int topK = 20)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            _logger.LogInformation("========== ADVANCED FILTER SEARCH ==========");
+
+            try
+            {
+                // Get database connection
+                var database = await _contentManagerServices.GetDatabaseAsync();
+                if (database == null)
+                {
+                    _logger.LogError("Database connection is not available");
+                    throw new Exception("Database connection is not available");
+                }
+
+                // Create TrimMainObjectSearch
+                var search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+
+                // Priority-based filter selection using switch-case pattern
+                // Determine which filter to use based on priority: URI > ClientId > Title > Date > Content
+                if (!string.IsNullOrWhiteSpace(uri))
+                {
+                    // URI filter (highest priority)
+                    var uriStr = $"uri:{uri}";
+                    search.SetSearchString(uriStr);
+                    _logger.LogInformation("   📋 Using URI filter: {UriFilter}", uriStr);
+                }
+                else if (!string.IsNullOrWhiteSpace(clientId))
+                {
+                    // Client ID filter
+                    var clientIdStr = $"recContainer:{clientId}";
+                    search.SetSearchString(clientIdStr);
+                    _logger.LogInformation("   📋 Using Client ID filter: {ClientIdFilter}", clientIdStr);
+                }
+                else if (!string.IsNullOrWhiteSpace(title))
+                {
+                    // Title filter
+                    var titleStr = $"typedTitle:{title}";
+                    search.SetSearchString(titleStr);
+                    _logger.LogInformation("   📋 Using Title filter: {TitleFilter}", titleStr);
+                }
+                else if (dateFrom.HasValue || dateTo.HasValue)
+                {
+                    // Date filter
+                    string dateStr;
+                    if (dateFrom.HasValue && dateTo.HasValue && dateFrom.Value.Date == dateTo.Value.Date)
+                    {
+                        // Single date
+                        dateStr = $"createdOn:{dateFrom.Value:MM/dd/yyyy}";
+                    }
+                    else if (dateFrom.HasValue && dateTo.HasValue)
+                    {
+                        // Date range
+                        dateStr = $"createdOn:{dateFrom.Value:MM/dd/yyyy} to {dateTo.Value:MM/dd/yyyy}";
+                    }
+                    else if (dateFrom.HasValue)
+                    {
+                        // Only start date
+                        dateStr = $"createdOn:{dateFrom.Value:MM/dd/yyyy}";
+                    }
+                    else
+                    {
+                        // Only end date
+                        dateStr = $"createdOn:{dateTo.Value:MM/dd/yyyy}";
+                    }
+                    search.SetSearchString(dateStr);
+                    _logger.LogInformation("   📋 Using Date filter: {DateFilter}", dateStr);
+                }
+                else if (!string.IsNullOrWhiteSpace(contentSearch))
+                {
+                    // Content search filter
+                    var contentStr = $"content:\"{contentSearch}\"";
+                    search.SetSearchString(contentStr);
+                    _logger.LogInformation("   📋 Using Content filter: {ContentFilter}", contentStr);
+                }
+                else
+                {
+                    // No filters provided - return empty result
+                    _logger.LogWarning("No advanced filters provided");
+                    return new RecordSearchResponseDto
+                    {
+                        Query = "[Advanced Filter Search]",
+                        Results = new List<RecordSearchResultDto>(),
+                        TotalResults = 0,
+                        QueryTime = 0f,
+                        SynthesizedAnswer = "No advanced filters provided. Please specify at least one filter."
+                    };
+                }
+
+                _logger.LogInformation("   📊 Advanced Filter Search initiated. Estimated count: {Count}", search.Count);
+
+                if (search.Count == 0)
+                {
+                    _logger.LogInformation("   ℹ️ Advanced Filter Search returned 0 results");
+                    stopwatch.Stop();
+                    return new RecordSearchResponseDto
+                    {
+                        Query = "[Advanced Filter Search]",
+                        Results = new List<RecordSearchResultDto>(),
+                        TotalResults = 0,
+                        QueryTime = (float)stopwatch.Elapsed.TotalSeconds,
+                        SynthesizedAnswer = "No records found matching the advanced filter criteria."
+                    };
+                }
+
+                // Collect results
+                var results = new List<RecordSearchResultDto>();
+                var recordCount = 0;
+
+                foreach (Record record in search)
+                {
+                    try
+                    {
+                        // Get ACL information
+                        string? aclJson = null;
+                        try
+                        {
+                            var acl = record.AccessControlList;
+                            if (acl != null)
+                            {
+                                // Build ACL JSON with permissions for UI
+                                // Function IDs: 1=ViewDocument, 2=ViewMetadata, 3=UpdateDocument, 4=UpdateMetadata,
+                                //               5=ModifyAccess, 6=DestroyRecord, 7=ContributeContents
+                                var aclData = new
+                                {
+                                    Permissions = new Dictionary<string, string>
+                                    {
+                                        { "ViewDocument", acl.get_AsString(1) ?? "Unknown" },
+                                        { "ViewMetadata", acl.get_AsString(2) ?? "Unknown" },
+                                        { "UpdateDocument", acl.get_AsString(3) ?? "Unknown" },
+                                        { "UpdateMetadata", acl.get_AsString(4) ?? "Unknown" },
+                                        { "ModifyAccess", acl.get_AsString(5) ?? "Unknown" },
+                                        { "DestroyRecord", acl.get_AsString(6) ?? "Unknown" },
+                                        { "ContributeContents", acl.get_AsString(7) ?? "Unknown" }
+                                    }
+                                };
+                                aclJson = JsonSerializer.Serialize(aclData);
+                            }
+                        }
+                        catch (Exception aclEx)
+                        {
+                            _logger.LogWarning(aclEx, "Failed to retrieve ACL for record {Uri}", record.Uri.Value);
+                        }
+
+                        var result = new RecordSearchResultDto
+                        {
+                            RecordUri = record.Uri.Value,
+                            RecordTitle = record.Title ?? "Untitled",
+                            RecordType = record.RecordType?.Name ?? "Unknown",
+                            DateCreated = record.DateCreated.ToDateTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                            RelevanceScore = 1.0f, // Advanced filter matches are exact matches
+                            ACL = aclJson
+                        };
+
+                        results.Add(result);
+                        recordCount++;
+
+                        // Limit results to topK
+                        if (recordCount >= topK)
+                        {
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "   ⚠️ Failed to process record: {Error}", ex.Message);
+                    }
+                }
+
+                stopwatch.Stop();
+                _logger.LogInformation("   ✅ Advanced Filter Search completed: Found {Count} records in {Time}s",
+                    results.Count, stopwatch.Elapsed.TotalSeconds);
+
+                return new RecordSearchResponseDto
+                {
+                    Query = "[Advanced Filter Search]",
+                    Results = results,
+                    TotalResults = results.Count,
+                    QueryTime = (float)stopwatch.Elapsed.TotalSeconds,
+                    SynthesizedAnswer = $"Found {results.Count} record(s) matching the advanced filter criteria."
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "   ❌ Error executing Advanced Filter search: {Message}", ex.Message);
+                stopwatch.Stop();
+                return new RecordSearchResponseDto
+                {
+                    Query = "[Advanced Filter Search]",
+                    Results = new List<RecordSearchResultDto>(),
+                    TotalResults = 0,
+                    QueryTime = (float)stopwatch.Elapsed.TotalSeconds,
+                    SynthesizedAnswer = $"Error executing search: {ex.Message}"
+                };
             }
         }
     }

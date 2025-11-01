@@ -24,6 +24,7 @@ namespace DocumentProcessingAPI.Core.DTOs
         public float RelevanceScore { get; set; }
         public Dictionary<string, object> Metadata { get; set; } = new();
         public string? ContentPreview { get; set; }
+        public string? ACL { get; set; }
     }
 
     /// <summary>
