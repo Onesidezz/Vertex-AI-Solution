@@ -30,12 +30,12 @@ public class GeminiEmbeddingService : IEmbeddingService
         // Read Vertex AI configuration
         _projectId = _configuration["VertexAI:ProjectId"] ?? throw new InvalidOperationException("VertexAI:ProjectId not configured");
         _location = _configuration["VertexAI:Location"] ?? "us-central1";
-        _embeddingModel = _configuration["VertexAI:EmbeddingModel"] ?? "text-embedding-005";
+        _embeddingModel = _configuration["VertexAI:EmbeddingModel"] ?? "gemini-embedding-001";
 
         // Read embedding dimension from configuration
         if (!int.TryParse(_configuration["VertexAI:EmbeddingDimension"], out _embeddingDimension))
         {
-            _embeddingDimension = 768; // Default dimension for text-embedding-005
+            _embeddingDimension = 3072; // Default dimension for gemini-embedding-001
         }
 
         // Initialize Vertex AI client

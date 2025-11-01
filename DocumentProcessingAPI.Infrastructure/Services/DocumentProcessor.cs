@@ -1364,19 +1364,34 @@ public class DocumentProcessor : IDocumentProcessor
     }
 
     /// <summary>
-    /// Call Gemini specifically for text correction
+    /// Call Vertex AI Gemini for text correction
     /// </summary>
     private async Task<string> CallGeminiForTextCorrection(string prompt)
     {
         try
         {
-            var apiKey = _configuration["Gemini:ApiKey"];
-            if (string.IsNullOrEmpty(apiKey))
+            var projectId = _configuration["VertexAI:ProjectId"];
+            var location = _configuration["VertexAI:Location"] ?? "us-central1";
+            var model = _configuration["VertexAI:GenerativeModel"] ?? "gemini-2.5-flash";
+
+            if (string.IsNullOrEmpty(projectId))
             {
+                _logger.LogWarning("VertexAI ProjectId not configured");
                 return "";
             }
 
+            // Build the endpoint URL for Vertex AI
+            var endpoint = $"https://{location}-aiplatform.googleapis.com/v1/projects/{projectId}/locations/{location}/publishers/google/models/{model}:generateContent";
+
             using var httpClient = new HttpClient() { Timeout = TimeSpan.FromMinutes(2) };
+
+            // Get access token from gcloud CLI
+            var accessToken = await GetGoogleCloudAccessTokenAsync();
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                _logger.LogError("Failed to get Google Cloud access token");
+                return "";
+            }
 
             var requestBody = new
             {
@@ -1384,6 +1399,7 @@ public class DocumentProcessor : IDocumentProcessor
                 {
                     new
                     {
+                        role = "user",
                         parts = new[]
                         {
                             new { text = prompt }
@@ -1393,16 +1409,17 @@ public class DocumentProcessor : IDocumentProcessor
                 generationConfig = new
                 {
                     temperature = 0.1, // Low temperature for consistent corrections
-                    maxOutputTokens = 2048
+                    maxOutputTokens = 2048,
+                    topP = 0.95,
+                    topK = 40
                 }
             };
 
             var jsonContent = JsonSerializer.Serialize(requestBody);
             var httpContent = new StringContent(jsonContent, Encoding.UTF8, System.Net.Mime.MediaTypeNames.Application.Json);
-            httpClient.DefaultRequestHeaders.Add("x-goog-api-key", apiKey);
+            httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
-            var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-            var response = await httpClient.PostAsync(url, httpContent);
+            var response = await httpClient.PostAsync(endpoint, httpContent);
 
             if (response.IsSuccessStatusCode)
             {
@@ -1425,12 +1442,64 @@ public class DocumentProcessor : IDocumentProcessor
                     }
                 }
             }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogError("Vertex AI API error: {StatusCode} - {Error}", response.StatusCode, errorContent);
+            }
 
             return "";
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to call Gemini for text correction");
+            _logger.LogWarning(ex, "Failed to call Vertex AI for text correction");
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Get Google Cloud access token using gcloud CLI
+    /// </summary>
+    private async Task<string> GetGoogleCloudAccessTokenAsync()
+    {
+        try
+        {
+            // Get gcloud path from configuration or use default Windows installation path
+            var gcloudPath = _configuration["VertexAI:GcloudPath"]
+                ?? @"C:\Users\ukhan2\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd";
+
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = gcloudPath,
+                    Arguments = "auth print-access-token",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.Start();
+            var token = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(token))
+            {
+                _logger.LogInformation("✅ Successfully obtained Google Cloud access token");
+                return token.Trim();
+            }
+            else
+            {
+                _logger.LogError("Failed to get gcloud access token. Error: {Error}", error);
+                return "";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception getting gcloud access token");
             return "";
         }
     }

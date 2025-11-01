@@ -2338,13 +2338,6 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             if (!results.Any())
                 return "";
 
-            var apiKey = _configuration["Gemini:ApiKey"];
-            if (string.IsNullOrEmpty(apiKey))
-            {
-                _logger.LogWarning("Gemini API key not configured");
-                return "";
-            }
-
             // Results are already deduplicated at this point, so we can use them directly
             var uniqueRecords = results
                 .OrderByDescending(r => r.RelevanceScore)
@@ -2424,17 +2417,36 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         }
 
         /// <summary>
-        /// Call Gemini API for text generation
+        /// Call Vertex AI Generative AI API for text generation
         /// </summary>
         private async Task<string> CallGeminiModelAsync(string prompt)
         {
             try
             {
-                var apiKey = _configuration["Gemini:ApiKey"];
-                if (string.IsNullOrEmpty(apiKey))
+                var projectId = _configuration["VertexAI:ProjectId"];
+                var location = _configuration["VertexAI:Location"] ?? "us-central1";
+                var model = _configuration["VertexAI:GenerativeModel"] ?? "gemini-2.5-flash";
+
+                if (string.IsNullOrEmpty(projectId))
+                {
+                    _logger.LogWarning("VertexAI ProjectId not configured");
                     return "";
+                }
+
+                _logger.LogInformation("🔄 Calling Vertex AI {Model} for text generation", model);
+
+                // Build the endpoint URL for Vertex AI
+                var endpoint = $"https://{location}-aiplatform.googleapis.com/v1/projects/{projectId}/locations/{location}/publishers/google/models/{model}:generateContent";
 
                 using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+
+                // Get access token from gcloud CLI
+                var accessToken = await GetGoogleCloudAccessTokenAsync();
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    _logger.LogError("Failed to get Google Cloud access token");
+                    return "";
+                }
 
                 var requestBody = new
                 {
@@ -2442,18 +2454,25 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     {
                         new
                         {
+                            role = "user",
                             parts = new[] { new { text = prompt } }
                         }
+                    },
+                    generationConfig = new
+                    {
+                        temperature = 0.7,
+                        topP = 0.95,
+                        topK = 40,
+                        maxOutputTokens = 8192
                     }
                 };
 
                 var jsonContent = JsonSerializer.Serialize(requestBody);
                 var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                httpClient.DefaultRequestHeaders.Add("x-goog-api-key", apiKey);
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {accessToken}");
 
-                var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-                var response = await httpClient.PostAsync(url, httpContent);
+                var response = await httpClient.PostAsync(endpoint, httpContent);
 
                 if (response.IsSuccessStatusCode)
                 {
@@ -2471,17 +2490,71 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                             var firstPart = parts[0];
                             if (firstPart.TryGetProperty("text", out var textElement))
                             {
-                                return textElement.GetString() ?? "";
+                                var result = textElement.GetString() ?? "";
+                                _logger.LogInformation("✅ Successfully generated text from Vertex AI ({Length} chars)", result.Length);
+                                return result;
                             }
                         }
                     }
+                }
+                else
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    _logger.LogError("Vertex AI API error: {StatusCode} - {Error}", response.StatusCode, errorContent);
                 }
 
                 return "";
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error calling Gemini API");
+                _logger.LogError(ex, "Error calling Vertex AI Generative API");
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// Get Google Cloud access token using gcloud CLI
+        /// </summary>
+        private async Task<string> GetGoogleCloudAccessTokenAsync()
+        {
+            try
+            {
+                // Get gcloud path from configuration or use default Windows installation path
+                var gcloudPath = _configuration["VertexAI:GcloudPath"]
+                    ?? @"C:\Users\ukhan2\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd";
+
+                var process = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = gcloudPath,
+                        Arguments = "auth print-access-token",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                var token = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(token))
+                {
+                    _logger.LogInformation("✅ Successfully obtained Google Cloud access token");
+                    return token.Trim();
+                }
+                else
+                {
+                    _logger.LogError("Failed to get gcloud access token. Error: {Error}", error);
+                    return "";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception getting gcloud access token");
                 return "";
             }
         }
