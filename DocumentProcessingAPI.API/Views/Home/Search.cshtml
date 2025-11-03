@@ -1987,112 +1987,88 @@
                 $('#sendToDropdown').hide();
             });
 
-            // Send to Teams
+            // Helper function to copy to clipboard
+            function copyToClipboard(text) {
+                // Try modern Clipboard API first
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        console.log('Teams: Copied using Clipboard API');
+                    }).catch(err => {
+                        console.warn('Clipboard API failed:', err);
+                        // Fallback
+                        copyToClipboardFallback(text);
+                    });
+                } else {
+                    // Use fallback
+                    copyToClipboardFallback(text);
+                }
+            }
+
+            // Fallback clipboard copy method
+            function copyToClipboardFallback(text) {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-999999px';
+                textarea.style.top = '-999999px';
+                document.body.appendChild(textarea);
+                textarea.focus();
+                textarea.select();
+
+                try {
+                    const success = document.execCommand('copy');
+                    console.log('Teams: Copy using execCommand:', success);
+                } catch (err) {
+                    console.error('Copy failed:', err);
+                }
+
+                document.body.removeChild(textarea);
+            }
+
+            // Send to Teams Click Handler
             $('#sendToTeams').on('click', function() {
                 const selectedCheckboxes = $('.row-checkbox:checked');
-                console.log('Teams: Selected checkboxes count:', selectedCheckboxes.length);
 
                 if (selectedCheckboxes.length === 0) {
+                    alert('Please select at least one record');
                     return;
                 }
 
-                // Collect selected records information
                 const records = [];
                 selectedCheckboxes.each(function() {
                     const uri = $(this).data('uri');
                     const title = $(this).data('title');
-                    console.log('Teams: Processing record - URI:', uri, 'Title:', title);
-                    if (uri && title) {
-                        records.push({ uri: uri, title: title });
-                    }
+                    if (uri && title) records.push({ uri, title });
                 });
-
-                console.log('Teams: Total records collected:', records.length);
-                console.log('Teams: Records array:', records);
 
                 if (records.length === 0) {
                     alert('No valid records selected');
                     return;
                 }
 
-                // Build message text for Teams - SIMPLE format
-                let messageText = `Selected Records (${records.length}):\n\n`;
+                // Build message text
+                let messageText = '📎 Selected Records:\n\n';
                 records.forEach(record => {
-                    messageText += `Record URI: ${record.uri}\n`;
-                    messageText += `Title: ${record.title}\n`;
-                    messageText += `Link: ${window.location.origin}/Download/${record.uri}\n\n`;
+                    messageText += `📄 ${record.title}\n🔗 ${window.location.origin}/Download/${record.uri}\n\n`;
                 });
 
-                console.log('Teams: Final message text length:', messageText.length);
-                console.log('Teams: Final message text:', messageText);
+                console.log('Teams: Message to copy:\n', messageText);
 
-                // Copy message to clipboard using modern Clipboard API with fallback
-                const copyToClipboard = async (text) => {
-                    console.log('Teams: copyToClipboard called with text length:', text.length);
-                    console.log('Teams: Text to copy:', text);
+                // Copy to clipboard
+                copyToClipboard(messageText);
 
-                    // Try modern Clipboard API first
-                    if (navigator.clipboard && window.isSecureContext) {
-                        try {
-                            await navigator.clipboard.writeText(text);
-                            console.log('Teams: Successfully copied using modern Clipboard API');
+                // Open Teams (user pastes manually)
+                const teamsLink = 'https://teams.microsoft.com/l/chat/0/0';
+                const confirmMsg = `✅ ${records.length} record(s) copied.\n\n` +
+                                   `Teams will open now.\n\n` +
+                                   `Steps:\n1️⃣ Click in the message box\n` +
+                                   `2️⃣ Press Ctrl+V\n` +
+                                   `3️⃣ Press Enter to send\n\n` +
+                                   `Click OK to open Teams.`;
 
-                            // Verify what was copied
-                            const copiedText = await navigator.clipboard.readText();
-                            console.log('Teams: Verified clipboard content length:', copiedText.length);
-                            console.log('Teams: Verified clipboard content:', copiedText);
-
-                            return true;
-                        } catch (err) {
-                            console.warn('Modern clipboard API failed, trying fallback:', err);
-                        }
-                    }
-
-                    // Fallback to execCommand
-                    console.log('Teams: Using execCommand fallback');
-                    const textarea = document.createElement('textarea');
-                    textarea.value = text;
-                    textarea.style.position = 'fixed';
-                    textarea.style.opacity = '0';
-                    document.body.appendChild(textarea);
-                    textarea.select();
-
-                    console.log('Teams: Textarea value length:', textarea.value.length);
-
-                    try {
-                        const success = document.execCommand('copy');
-                        console.log('Teams: execCommand copy result:', success);
-                        document.body.removeChild(textarea);
-                        return success;
-                    } catch (err) {
-                        document.body.removeChild(textarea);
-                        console.error('Fallback copy failed:', err);
-                        return false;
-                    }
-                };
-
-                // Copy to clipboard and open Teams
-                copyToClipboard(messageText).then(success => {
-                    console.log('Teams: Copy operation completed, success:', success);
-                    if (success) {
-                        // Show immediate notification
-                        alert('✓ ' + records.length + ' record(s) copied to clipboard!\n\n' +
-                              'Opening Teams - Paste with Ctrl+V');
-
-                        // Wait a moment for clipboard to fully persist, then open Teams
-                        setTimeout(() => {
-                            try {
-                                window.location.href = 'ms-teams:';
-                            } catch (err) {
-                                console.error('Failed to open Teams:', err);
-                                window.open('https://teams.microsoft.com', '_blank');
-                            }
-                        }, 100);
-
-                    } else {
-                        alert('Failed to copy to clipboard.');
-                    }
-                });
+                if (confirm(confirmMsg)) {
+                    window.open(teamsLink, '_blank');
+                }
 
                 // Hide dropdown
                 $('#sendToDropdown').hide();
