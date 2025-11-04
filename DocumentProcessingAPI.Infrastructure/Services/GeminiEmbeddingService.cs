@@ -1,10 +1,7 @@
 ﻿using DocumentProcessingAPI.Core.Interfaces;
+using Google.Cloud.AIPlatform.V1;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System.Text;
-using System.Text.Json;
-using Google.Cloud.AIPlatform.V1;
-using Google.Protobuf.WellKnownTypes;
 
 namespace DocumentProcessingAPI.Infrastructure.Services;
 

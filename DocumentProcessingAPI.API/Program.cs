@@ -106,6 +106,10 @@ builder.Services.AddScoped<IFileStorageService, LocalFileStorageService>();
 builder.Services.AddScoped<IRecordEmbeddingService, RecordEmbeddingService>();
 builder.Services.AddScoped<IRecordSearchService, RecordSearchService>();
 
+// Record Search Helper Services (segregated from RecordSearchService)
+builder.Services.AddScoped<IRecordSearchHelperServices, RecordSearchHelperServices>();
+builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServices>();
+
 // Quartz Scheduler for Content Manager Record Sync----------------------------------------------------------
 //builder.Services.AddQuartz(q =>
 //{

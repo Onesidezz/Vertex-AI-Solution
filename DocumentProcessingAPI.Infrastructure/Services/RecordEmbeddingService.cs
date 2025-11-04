@@ -67,10 +67,30 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     return 0;
                 }
 
+                // Get all existing RecordUri values from PostgreSQL to filter out already-processed records
+                _logger.LogInformation("🔍 Checking PostgreSQL for existing records...");
+                var existingRecordUris = await _pgVectorService.GetAllExistingRecordUrisAsync();
+
+                // Filter out records that already exist in PostgreSQL
+                var recordsBeforeFilter = records.Count;
+                records = records.Where(r => !existingRecordUris.Contains(r.URI)).ToList();
+                var recordsAfterFilter = records.Count;
+                var skippedCount = recordsBeforeFilter - recordsAfterFilter;
+
+                _logger.LogInformation("✅ Filtered records:");
+                _logger.LogInformation("   • Total records from Content Manager: {Total}", recordsBeforeFilter);
+                _logger.LogInformation("   • Records already in PostgreSQL (skipped): {Skipped}", skippedCount);
+                _logger.LogInformation("   • New records to process: {New}", recordsAfterFilter);
+
+                if (!records.Any())
+                {
+                    _logger.LogWarning("⚠️ All records are already processed. Nothing to do.");
+                    return 0;
+                }
+
                 // Process each record and generate embeddings
                 var vectorDataList = new List<VectorData>();
                 int processedCount = 0;
-                int skippedCount = 0;
                 int totalChunks = 0;
                 int documentsWithContent = 0;
                 int containersProcessed = 0;
@@ -95,19 +115,6 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         {
                             _logger.LogInformation("📊 Progress: [{Current}/{Total}] - {Percentage:F1}% Complete",
                                 currentRecordIndex, records.Count, percentComplete);
-                        }
-
-                        // Check if this record already has embeddings in PostgreSQL
-                        // Format: cm_record_{URI}_chunk_0
-                        var firstChunkId = $"{RECORD_COLLECTION_PREFIX}{record.URI}_chunk_0";
-                        var existing = await _pgVectorService.GetEmbeddingAsync(firstChunkId);
-
-                        if (existing != null)
-                        {
-                            skippedCount++;
-                            _logger.LogWarning("⏭️ SKIPPING - Record already embedded in PostgreSQL");
-                            _logger.LogInformation("");
-                            continue; // Skip this record - already processed
                         }
 
                         // Build comprehensive text representation (includes document content if electronic)
@@ -243,7 +250,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("✅ BATCH EMBEDDING PROCESS COMPLETE");
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("📊 SUMMARY STATISTICS:");
-                _logger.LogInformation("  • Total Records Retrieved: {Total}", records.Count);
+                _logger.LogInformation("  • Total Records Retrieved: {Total}", recordsBeforeFilter);
                 _logger.LogInformation("  • Records Already Embedded (Skipped): {Skipped}", skippedCount);
                 _logger.LogInformation("  • New Records Processed: {Processed}", processedCount);
                 _logger.LogInformation("  • Failed Records: {Failed}", failedCount);

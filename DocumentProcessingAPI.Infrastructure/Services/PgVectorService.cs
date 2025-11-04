@@ -380,6 +380,29 @@ public class PgVectorService
     }
 
     /// <summary>
+    /// Get all distinct RecordUri values that exist in the database
+    /// Used to filter out already-processed records during batch operations
+    /// </summary>
+    public async Task<HashSet<long>> GetAllExistingRecordUrisAsync()
+    {
+        try
+        {
+            var existingUris = await _context.Embeddings
+                .Select(e => e.RecordUri)
+                .Distinct()
+                .ToListAsync();
+
+            _logger.LogInformation("📊 Found {Count} distinct RecordUri values in PostgreSQL", existingUris.Count);
+            return new HashSet<long>(existingUris);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get existing RecordUri values from PostgreSQL");
+            return new HashSet<long>();
+        }
+    }
+
+    /// <summary>
     /// Search for similar embeddings using vector similarity (cosine distance)
     /// Supports metadata filtering for dates, file types, etc.
     /// </summary>
