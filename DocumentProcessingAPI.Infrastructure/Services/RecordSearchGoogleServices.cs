@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
+using Google.Apis.Auth.OAuth2;
 
 namespace DocumentProcessingAPI.Infrastructure.Services
 {
@@ -121,49 +122,52 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         }
 
         /// <summary>
-        /// Get Google Cloud access token using gcloud CLI
+        /// Get Google Cloud access token using Service Account Key
         /// </summary>
         public async Task<string> GetGoogleCloudAccessTokenAsync()
         {
             try
             {
-                // Get gcloud path from configuration or use default Windows installation path
-                var gcloudPath = _configuration["VertexAI:GcloudPath"]
-                    ?? @"C:\Users\ukhan2\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd";
+                var serviceAccountKeyPath = _configuration["VertexAI:ServiceAccountKeyPath"];
 
-                var process = new System.Diagnostics.Process
+                if (string.IsNullOrEmpty(serviceAccountKeyPath))
                 {
-                    StartInfo = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = gcloudPath,
-                        Arguments = "auth print-access-token",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
-                };
-
-                process.Start();
-                var token = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
-
-                if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(token))
-                {
-                    _logger.LogInformation("✅ Successfully obtained Google Cloud access token");
-                    return token.Trim();
+                    _logger.LogError("VertexAI:ServiceAccountKeyPath not configured in appsettings.json");
+                    throw new InvalidOperationException("Service account key path is not configured. Please set VertexAI:ServiceAccountKeyPath in appsettings.json");
                 }
-                else
+
+                if (!File.Exists(serviceAccountKeyPath))
                 {
-                    _logger.LogError("Failed to get gcloud access token. Error: {Error}", error);
-                    return "";
+                    _logger.LogError("Service account key file not found at: {Path}", serviceAccountKeyPath);
+                    throw new FileNotFoundException($"Service account key file not found at: {serviceAccountKeyPath}");
                 }
+
+                _logger.LogDebug("Loading service account credentials from: {Path}", serviceAccountKeyPath);
+
+                // Load service account credentials
+                GoogleCredential credential;
+                using (var stream = new FileStream(serviceAccountKeyPath, FileMode.Open, FileAccess.Read))
+                {
+                    credential = GoogleCredential.FromStream(stream)
+                        .CreateScoped("https://www.googleapis.com/auth/cloud-platform");
+                }
+
+                // Get access token
+                var token = await credential.UnderlyingCredential.GetAccessTokenForRequestAsync();
+
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    _logger.LogError("Failed to obtain access token from service account");
+                    throw new InvalidOperationException("Failed to obtain access token from service account");
+                }
+
+                _logger.LogInformation("✅ Successfully obtained Google Cloud access token from service account");
+                return token;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Exception getting gcloud access token");
-                return "";
+                _logger.LogError(ex, "Failed to get Google Cloud access token from service account");
+                throw;
             }
         }
 

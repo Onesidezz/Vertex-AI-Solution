@@ -1,5 +1,7 @@
 ﻿using DocumentProcessingAPI.Core.Interfaces;
 using Google.Cloud.AIPlatform.V1;
+using Google.Apis.Auth.OAuth2;
+using Grpc.Auth;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -35,13 +37,39 @@ public class GeminiEmbeddingService : IEmbeddingService
             _embeddingDimension = 3072; // Default dimension for gemini-embedding-001
         }
 
-        // Initialize Vertex AI client
+        // Initialize Vertex AI client with service account authentication
+        var serviceAccountKeyPath = _configuration["VertexAI:ServiceAccountKeyPath"];
+
+        if (string.IsNullOrEmpty(serviceAccountKeyPath))
+        {
+            _logger.LogError("VertexAI:ServiceAccountKeyPath not configured in appsettings.json");
+            throw new InvalidOperationException("Service account key path is not configured. Please set VertexAI:ServiceAccountKeyPath in appsettings.json");
+        }
+
+        if (!File.Exists(serviceAccountKeyPath))
+        {
+            _logger.LogError("Service account key file not found at: {Path}", serviceAccountKeyPath);
+            throw new FileNotFoundException($"Service account key file not found at: {serviceAccountKeyPath}");
+        }
+
+        _logger.LogInformation("🔑 Loading service account credentials from: {Path}", serviceAccountKeyPath);
+
+        // Load service account credentials
+        GoogleCredential credential;
+        using (var stream = new FileStream(serviceAccountKeyPath, FileMode.Open, FileAccess.Read))
+        {
+            credential = GoogleCredential.FromStream(stream)
+                .CreateScoped("https://www.googleapis.com/auth/cloud-platform");
+        }
+
+        // Initialize client with explicit credentials
         _predictionClient = new PredictionServiceClientBuilder
         {
-            Endpoint = $"{_location}-aiplatform.googleapis.com"
+            Endpoint = $"{_location}-aiplatform.googleapis.com",
+            ChannelCredentials = credential.ToChannelCredentials()
         }.Build();
 
-        _logger.LogInformation("Vertex AI Embedding Service initialized - Project: {Project}, Location: {Location}, Model: {Model}, Dimensions: {Dimensions}",
+        _logger.LogInformation("✅ Vertex AI Embedding Service initialized - Project: {Project}, Location: {Location}, Model: {Model}, Dimensions: {Dimensions}",
             _projectId, _location, _embeddingModel, _embeddingDimension);
     }
 

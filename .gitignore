@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Google Cloud Service Account Keys (SECURITY: Never commit these!)
+**/my-uk-project-*.json
+**/*service-account*.json
+**/*gcp-key*.json
+**/*google-credentials*.json

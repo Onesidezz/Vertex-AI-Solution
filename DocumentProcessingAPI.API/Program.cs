@@ -78,9 +78,9 @@ builder.Services.AddDbContext<DocumentProcessingDbContext>(options =>
 });
 
 // Vertex AI configuration
-// Uses Google Cloud authentication (gcloud auth application-default login)
-// No HTTP client needed - Vertex AI SDK handles authentication
-// Configuration is in appsettings.json under "VertexAI" section
+// Uses Service Account Key authentication (JSON key file)
+// Configure VertexAI:ServiceAccountKeyPath in appsettings.json
+// Both REST API and gRPC SDK use the same service account credentials
 
 // File System Abstraction
 builder.Services.AddSingleton<IFileSystem, FileSystem>();
