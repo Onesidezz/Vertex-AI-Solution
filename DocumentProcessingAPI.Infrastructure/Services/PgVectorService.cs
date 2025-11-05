@@ -549,8 +549,10 @@ public class PgVectorService
             var hybridResults = semanticResults.Select(r =>
             {
                 var semanticScore = r.similarity;
-                var keywordScore = CalculateKeywordMatchScore(
-                    r.metadata["chunk_content"].ToString(),
+
+                // Calculate keyword matches across multiple metadata fields
+                var keywordScore = CalculateKeywordMatchScoreMultiField(
+                    r.metadata,
                     keywords);
 
                 // Hybrid score: weighted combination
@@ -620,6 +622,58 @@ public class PgVectorService
 
         // Normalize by number of keywords
         return Math.Min(1.0f, matchedKeywords / keywords.Count);
+    }
+
+    /// <summary>
+    /// Calculate keyword match score across multiple metadata fields with weighted importance
+    /// </summary>
+    private float CalculateKeywordMatchScoreMultiField(Dictionary<string, object> metadata, List<string> keywords)
+    {
+        if (!keywords.Any() || metadata == null)
+            return 0f;
+
+        // Define field weights (total should be 1.0)
+        // NOTE: date_created is included for year/date matching (e.g., "2024", "2025")
+        // Primary date filtering still happens via ExtractDateRangeFromQuery + ApplyDateRangeFilter
+        var fieldWeights = new Dictionary<string, float>
+        {
+            ["chunk_content"] = 0.35f,      // Main content - highest weight
+            ["record_title"] = 0.20f,       // Record title - very important
+            ["file_name"] = 0.15f,          // File name - very important
+            ["document_category"] = 0.11f,  // Category - important for classification
+            ["record_type"] = 0.08f,        // Record type - contextual
+            ["container"] = 0.05f,          // Container name - useful context
+            ["assignee"] = 0.04f,           // Assignee - useful for person searches
+            ["date_created"] = 0.02f,       // Date - useful for year/date matching
+            ["file_type"] = 0.01f           // File type - least important
+        };
+
+        float totalScore = 0f;
+        float totalWeight = 0f;
+
+        foreach (var fieldConfig in fieldWeights)
+        {
+            var fieldName = fieldConfig.Key;
+            var weight = fieldConfig.Value;
+
+            // Skip if field doesn't exist or is null
+            if (!metadata.ContainsKey(fieldName) || metadata[fieldName] == null)
+                continue;
+
+            var fieldContent = metadata[fieldName].ToString();
+            if (string.IsNullOrWhiteSpace(fieldContent))
+                continue;
+
+            // Calculate keyword match for this field
+            var fieldScore = CalculateKeywordMatchScore(fieldContent, keywords);
+
+            // Add weighted score
+            totalScore += fieldScore * weight;
+            totalWeight += weight;
+        }
+
+        // Normalize by actual weights used (in case some fields were missing)
+        return totalWeight > 0 ? totalScore / totalWeight : 0f;
     }
 
     /// <summary>

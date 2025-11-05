@@ -1118,6 +1118,271 @@
         .send-to-option:hover i {
             color: #0078d4;
         }
+
+        /* AI Buttons */
+        .ai-btn {
+            padding: 5px 10px;
+            border: 1px solid #143d78;
+            border-radius: 4px;
+            background: linear-gradient(135deg, #143d78 0%, #07587b 100%);
+            color: white;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 500;
+        }
+
+        .ai-btn:hover {
+            background: linear-gradient(135deg, #07587b 0%, #143d78 100%);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(20, 61, 120, 0.3);
+        }
+
+        .ai-btn i {
+            font-size: 12px;
+        }
+
+        /* AI Summary Modal */
+        .ai-summary-modal {
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            overflow: auto;
+            display: none;
+        }
+
+        .ai-summary-modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 700px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: slideDown 0.3s ease;
+        }
+
+        .ai-summary-modal-header {
+            padding: 20px 25px;
+            background: linear-gradient(135deg, #143d78 0%, #07587b 100%);
+            color: white;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .ai-summary-modal-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .ai-summary-modal-header i {
+            margin-right: 8px;
+        }
+
+        .ai-summary-modal-close {
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+            transition: opacity 0.2s;
+        }
+
+        .ai-summary-modal-close:hover {
+            opacity: 0.7;
+        }
+
+        .ai-summary-modal-body {
+            padding: 25px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .ai-summary-loading {
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .ai-summary-loading .spinner {
+            margin: 0 auto 20px;
+        }
+
+        .ai-summary-text {
+            font-size: 15px;
+            line-height: 1.8;
+            color: #333;
+        }
+
+        .ai-summary-record-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 4px solid #143d78;
+        }
+
+        .ai-summary-record-info strong {
+            color: #143d78;
+            display: inline-block;
+            min-width: 80px;
+        }
+
+        /* AI Ask Modal */
+        .ai-ask-modal {
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6);
+            overflow: auto;
+            display: none;
+        }
+
+        .ai-ask-modal-content {
+            background-color: #fff;
+            margin: 3% auto;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 800px;
+            height: 80vh;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: slideDown 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ai-ask-modal-header {
+            padding: 20px 25px;
+            background: linear-gradient(135deg, #143d78 0%, #07587b 100%);
+            color: white;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .ai-ask-modal-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .ai-ask-modal-header i {
+            margin-right: 8px;
+        }
+
+        .ai-ask-modal-close {
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+            transition: opacity 0.2s;
+        }
+
+        .ai-ask-modal-close:hover {
+            opacity: 0.7;
+        }
+
+        .ai-ask-modal-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .ai-ask-chat-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f9f9f9;
+        }
+
+        .ai-ask-message {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .ai-ask-message.user {
+            justify-content: flex-end;
+        }
+
+        .ai-ask-message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .ai-ask-message.user .ai-ask-message-content {
+            background: #143d78;
+            color: white;
+        }
+
+        .ai-ask-message.ai .ai-ask-message-content {
+            background: white;
+            color: #333;
+            border: 1px solid #e0e0e0;
+        }
+
+        .ai-ask-input-container {
+            padding: 15px 20px;
+            border-top: 1px solid #e0e0e0;
+            background: white;
+            display: flex;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .ai-ask-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .ai-ask-input:focus {
+            border-color: #143d78;
+            box-shadow: 0 0 0 3px rgba(20, 61, 120, 0.1);
+        }
+
+        .ai-ask-send-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #143d78 0%, #07587b 100%);
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .ai-ask-send-btn:hover {
+            background: linear-gradient(135deg, #07587b 0%, #143d78 100%);
+            transform: translateY(-1px);
+        }
+
+        .ai-ask-send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -1371,6 +1636,7 @@
                             <th style="width: 120px;">State</th>
                             <th style="width: 150px;">Date Created</th>
                             <th style="min-width: 120px;">Relevance</th>
+                            <th style="width: 150px; text-align: center;">AI</th>
                             <th style="width: 60px; text-align: center;">Favorite</th>
                         </tr>
                     </thead>
@@ -1412,6 +1678,16 @@
                                 </td>
                                 <td>
                                     <span class="score-badge">@result.RelevanceScore.ToString("P0")</span>
+                                </td>
+                                <td style="text-align: center;">
+                                    <div style="display: flex; gap: 6px; justify-content: center;">
+                                        <button class="ai-btn ai-summary-btn" data-uri="@result.RecordUri" title="AI Summary">
+                                            <i class="bi bi-file-earmark-text"></i> Summary
+                                        </button>
+                                        <button class="ai-btn ai-ask-btn" data-uri="@result.RecordUri" title="Ask AI">
+                                            <i class="bi bi-chat-dots"></i> Ask AI
+                                        </button>
+                                    </div>
                                 </td>
                                 <td style="text-align: center;">
                                     <i class="bi bi-star favorite-star" title="Add to favorites"></i>
@@ -1462,8 +1738,53 @@
         </div>
     </div>
 
+    <!-- AI Summary Modal -->
+    <div id="aiSummaryModal" class="ai-summary-modal">
+        <div class="ai-summary-modal-content">
+            <div class="ai-summary-modal-header">
+                <h3><i class="bi bi-stars"></i> AI Document Summary</h3>
+                <span class="ai-summary-modal-close">&times;</span>
+            </div>
+            <div class="ai-summary-modal-body">
+                <div class="ai-summary-record-info" id="aiSummaryRecordInfo"></div>
+                <div class="ai-summary-loading" id="aiSummaryLoading">
+                    <div class="spinner"></div>
+                    <p>Generating AI summary...</p>
+                </div>
+                <div class="ai-summary-text" id="aiSummaryText" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Ask Modal -->
+    <div id="aiAskModal" class="ai-ask-modal">
+        <div class="ai-ask-modal-content">
+            <div class="ai-ask-modal-header">
+                <h3><i class="bi bi-chat-dots"></i> Ask AI about Record</h3>
+                <span class="ai-ask-modal-close">&times;</span>
+            </div>
+            <div class="ai-ask-modal-body">
+                <div class="ai-ask-record-info" style="padding: 15px; background: #f8f9fa; border-bottom: 1px solid #e0e0e0;">
+                    <div id="aiAskRecordInfo"></div>
+                </div>
+                <div class="ai-ask-chat-container" id="aiAskChatContainer">
+                    <!-- Chat messages will be appended here -->
+                </div>
+                <div class="ai-ask-input-container">
+                    <input type="text" class="ai-ask-input" id="aiAskInput" placeholder="Ask a question about this record...">
+                    <button class="ai-ask-send-btn" id="aiAskSendBtn">
+                        <i class="bi bi-send"></i> Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- jQuery -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <!-- AI Functionality -->
+    <script src="/js/ai-record-features.js"></script>
 
     <script>
         // Toggle metadata fields

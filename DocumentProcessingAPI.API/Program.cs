@@ -110,6 +110,9 @@ builder.Services.AddScoped<IRecordSearchService, RecordSearchService>();
 builder.Services.AddScoped<IRecordSearchHelperServices, RecordSearchHelperServices>();
 builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServices>();
 
+// AI Record Services (Summary and Q&A using Gemini)
+builder.Services.AddScoped<IAIRecordService, AIRecordService>();
+
 // Quartz Scheduler for Content Manager Record Sync----------------------------------------------------------
 //builder.Services.AddQuartz(q =>
 //{
