@@ -7,8 +7,9 @@ namespace DocumentProcessingAPI.Core.Interfaces
     {
         /// <summary>
         /// Process all records from Content Manager based on search criteria
+        /// Uses pagination, parallel processing, and checkpoints for scalability
         /// </summary>
-        Task<int> ProcessAllRecordsAsync(string searchString = "*");
+        Task<int> ProcessAllRecordsAsync(string searchString = "*", CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Delete all embeddings (chunks) for a specific record URI from Vector DB

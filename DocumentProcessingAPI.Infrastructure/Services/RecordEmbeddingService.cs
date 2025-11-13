@@ -21,6 +21,10 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         private const string RECORD_COLLECTION_PREFIX = "cm_record_";
         private const int CHUNK_SIZE = 1500; // tokens
         private const int CHUNK_OVERLAP = 150; // tokens
+        private const int PAGE_SIZE = 1000; // Records per page
+        private const int MAX_PARALLEL_TASKS = 10; // Concurrent record processing
+        private const int CHECKPOINT_INTERVAL = 10; // Save checkpoint every N pages
+        private const string JOB_NAME = "RecordSyncJob";
 
         public RecordEmbeddingService(
             ContentManagerServices contentManagerServices,
@@ -40,255 +44,335 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
         /// <summary>
         /// Process all records from Content Manager based on search criteria
-        /// Skips records that are already embedded (checks if embedding exists in Qdrant)
+        /// Uses pagination, parallel processing, and checkpoints for scalability
+        /// Supports incremental sync using lastSyncDate from checkpoint
         /// </summary>
-        public async Task<int> ProcessAllRecordsAsync(string searchString = "*")
+        public async Task<int> ProcessAllRecordsAsync(string searchString = "*", CancellationToken cancellationToken = default)
         {
             try
             {
                 _logger.LogInformation("========================================");
-                _logger.LogInformation("🚀 STARTING BATCH EMBEDDING PROCESS");
+                _logger.LogInformation("🚀 STARTING OPTIMIZED BATCH EMBEDDING PROCESS");
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("Search Criteria: {SearchString}", searchString);
                 _logger.LogInformation("Start Time: {StartTime}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                _logger.LogInformation("Configuration:");
+                _logger.LogInformation("  • Page Size: {PageSize} records", PAGE_SIZE);
+                _logger.LogInformation("  • Max Parallel Tasks: {MaxParallel}", MAX_PARALLEL_TASKS);
+                _logger.LogInformation("  • Checkpoint Interval: Every {Interval} pages", CHECKPOINT_INTERVAL);
 
                 var startTime = DateTime.Now;
 
                 // Ensure Content Manager is connected
                 await _contentManagerServices.ConnectDatabaseAsync();
 
-                // Get all records
-                var records = await _contentManagerServices.GetRecordsAsync(searchString);
-                _logger.LogInformation("📊 Retrieved {Count} records from Content Manager", records.Count);
+                // Get or create checkpoint
+                var checkpoint = await _pgVectorService.GetOrCreateCheckpointAsync(JOB_NAME);
+                _logger.LogInformation("📌 Checkpoint loaded:");
+                _logger.LogInformation("  • Last Sync Date: {LastSyncDate}", checkpoint.LastSyncDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never");
+                _logger.LogInformation("  • Last Processed Page: {LastPage}", checkpoint.LastProcessedPage);
 
-                if (!records.Any())
-                {
-                    _logger.LogWarning("⚠️ No records found matching search criteria");
-                    return 0;
-                }
+                // Update checkpoint status to Running
+                await _pgVectorService.UpdateCheckpointAsync(
+                    JOB_NAME,
+                    checkpoint.LastProcessedPage,
+                    "Running",
+                    errorMessage: null);
 
-                // Get all existing RecordUri values from PostgreSQL to filter out already-processed records
-                _logger.LogInformation("🔍 Checking PostgreSQL for existing records...");
-                var existingRecordUris = await _pgVectorService.GetAllExistingRecordUrisAsync();
-
-                // Filter out records that already exist in PostgreSQL
-                var recordsBeforeFilter = records.Count;
-                records = records.Where(r => !existingRecordUris.Contains(r.URI)).ToList();
-                var recordsAfterFilter = records.Count;
-                var skippedCount = recordsBeforeFilter - recordsAfterFilter;
-
-                _logger.LogInformation("✅ Filtered records:");
-                _logger.LogInformation("   • Total records from Content Manager: {Total}", recordsBeforeFilter);
-                _logger.LogInformation("   • Records already in PostgreSQL (skipped): {Skipped}", skippedCount);
-                _logger.LogInformation("   • New records to process: {New}", recordsAfterFilter);
-
-                if (!records.Any())
-                {
-                    _logger.LogWarning("⚠️ All records are already processed. Nothing to do.");
-                    return 0;
-                }
-
-                // Process each record and generate embeddings
-                var vectorDataList = new List<VectorData>();
-                int processedCount = 0;
-                int totalChunks = 0;
-                int documentsWithContent = 0;
-                int containersProcessed = 0;
-                int recordsWithoutContent = 0;
-                int currentRecordIndex = 0;
-                int failedCount = 0;
+                // Statistics
+                long totalProcessed = 0;
+                long totalSuccess = 0;
+                long totalFailed = 0;
+                long totalChunks = 0;
                 var failedRecords = new List<(long uri, string title, string error)>();
 
-                _logger.LogInformation("");
-                _logger.LogInformation("📝 Starting record processing loop...");
-                _logger.LogInformation("");
+                // Get first page to determine total count
+                var firstPage = await _contentManagerServices.GetRecordsPaginatedAsync(
+                    searchString,
+                    0,
+                    PAGE_SIZE,
+                    checkpoint.LastSyncDate);
 
-                foreach (var record in records)
+                if (firstPage.TotalCount == 0)
                 {
-                    currentRecordIndex++;
-                    var percentComplete = (double)currentRecordIndex / records.Count * 100;
+                    _logger.LogWarning("⚠️ No records found matching search criteria");
+                    await _pgVectorService.UpdateCheckpointAsync(
+                        JOB_NAME,
+                        checkpoint.LastProcessedPage,
+                        "Completed",
+                        lastSyncDate: DateTime.UtcNow);
+                    return 0;
+                }
 
-                    try
+                _logger.LogInformation("📊 Total records to process: {TotalCount}", firstPage.TotalCount);
+                _logger.LogInformation("📊 Total pages: {TotalPages}", firstPage.TotalPages);
+                _logger.LogInformation("");
+
+                // Get existing RecordUri values for filtering (once)
+                _logger.LogInformation("🔍 Checking PostgreSQL for existing records...");
+                var existingRecordUris = await _pgVectorService.GetAllExistingRecordUrisAsync();
+                _logger.LogInformation("✅ Found {Count} existing records in PostgreSQL", existingRecordUris.Count);
+
+                // Process pages
+                for (int pageNumber = 0; pageNumber < firstPage.TotalPages; pageNumber++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    _logger.LogInformation("════════════════════════════════════════");
+                    _logger.LogInformation("📄 PROCESSING PAGE {PageNumber} of {TotalPages}", pageNumber + 1, firstPage.TotalPages);
+                    _logger.LogInformation("════════════════════════════════════════");
+
+                    // Fetch page
+                    var pagedResult = pageNumber == 0 ? firstPage : await _contentManagerServices.GetRecordsPaginatedAsync(
+                        searchString,
+                        pageNumber,
+                        PAGE_SIZE,
+                        checkpoint.LastSyncDate);
+
+                    // Filter out existing records
+                    var recordsToProcess = pagedResult.Items
+                        .Where(r => !existingRecordUris.Contains(r.URI))
+                        .ToList();
+
+                    var skippedCount = pagedResult.Items.Count - recordsToProcess.Count;
+                    _logger.LogInformation("📊 Page Statistics:");
+                    _logger.LogInformation("  • Records in page: {PageCount}", pagedResult.Items.Count);
+                    _logger.LogInformation("  • Already embedded (skipped): {Skipped}", skippedCount);
+                    _logger.LogInformation("  • New records to process: {New}", recordsToProcess.Count);
+
+                    if (!recordsToProcess.Any())
                     {
-                        // Only log every 10th record progress for successful records to reduce noise
-                        if (currentRecordIndex % 10 == 0 || currentRecordIndex == 1)
-                        {
-                            _logger.LogInformation("📊 Progress: [{Current}/{Total}] - {Percentage:F1}% Complete",
-                                currentRecordIndex, records.Count, percentComplete);
-                        }
+                        _logger.LogInformation("⏭️ All records on this page already processed, skipping...");
+                        continue;
+                    }
 
-                        // Build comprehensive text representation (includes document content if electronic)
-                        // Process ALL records: containers, records with content, records without content
-                        var (metadataText, documentContent) = await BuildRecordTextComponentsAsync(record);
+                    // Process records in parallel using semaphore for rate limiting
+                    var semaphore = new SemaphoreSlim(MAX_PARALLEL_TASKS, MAX_PARALLEL_TASKS);
+                    var processingTasks = new List<Task<(bool success, long uri, string title, string? error, List<VectorData> vectors)>>();
 
-                        // Track record types
-                        string recordCategory = "";
-                        if (record.IsContainer == "Container")
+                    foreach (var record in recordsToProcess)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var task = Task.Run(async () =>
                         {
-                            containersProcessed++;
-                            recordCategory = "Container (Metadata Only)";
-                        }
-                        else if (!string.IsNullOrWhiteSpace(documentContent))
+                            await semaphore.WaitAsync(cancellationToken);
+                            try
+                            {
+                                return await ProcessSingleRecordAsync(record, cancellationToken);
+                            }
+                            finally
+                            {
+                                semaphore.Release();
+                            }
+                        }, cancellationToken);
+
+                        processingTasks.Add(task);
+                    }
+
+                    // Wait for all records in page to complete
+                    var results = await Task.WhenAll(processingTasks);
+
+                    // Collect vectors and statistics
+                    var pageVectors = new List<VectorData>();
+                    int pageSuccess = 0;
+                    int pageFailed = 0;
+
+                    foreach (var result in results)
+                    {
+                        if (result.success)
                         {
-                            documentsWithContent++;
-                            recordCategory = "Document with Content";
+                            pageSuccess++;
+                            pageVectors.AddRange(result.vectors);
+                            totalChunks += result.vectors.Count;
                         }
                         else
                         {
-                            recordsWithoutContent++;
-                            recordCategory = "Record without Content (Metadata Only)";
-                        }
-
-                        // Combine metadata + document content
-                        var fullRecordText = metadataText;
-                        if (!string.IsNullOrWhiteSpace(documentContent))
-                        {
-                            fullRecordText += "\n\n--- Document Content ---\n" + documentContent;
-                        }
-
-                        _logger.LogInformation("📊 Processing Results:");
-                        _logger.LogInformation("   • Category: {Category}", recordCategory);
-                        _logger.LogInformation("   • Metadata Size: {MetadataSize} chars", metadataText.Length);
-                        if (!string.IsNullOrWhiteSpace(documentContent))
-                        {
-                            _logger.LogInformation("   • Document Content Size: {ContentSize} chars", documentContent.Length);
-                        }
-                        _logger.LogInformation("   • Total Text Size: {TotalSize} chars", fullRecordText.Length);
-
-                        // Chunk the text
-                        _logger.LogInformation("✂️ Chunking text for embedding...");
-                        var textChunks = await _textChunkingService.ChunkTextAsync(fullRecordText, CHUNK_SIZE, CHUNK_OVERLAP);
-
-                        _logger.LogInformation("✅ Created {ChunkCount} chunk(s) for this record", textChunks.Count);
-
-                        totalChunks += textChunks.Count;
-
-                        // Build a concise metadata header to prepend to each chunk
-                        // This ensures ALL chunks can match date-based queries
-                        var metadataHeader = BuildChunkMetadataHeader(record);
-
-                        // Generate embeddings for each chunk
-                        _logger.LogInformation("🔢 Generating embeddings for {ChunkCount} chunk(s)...", textChunks.Count);
-                        int chunkIndex = 0;
-                        foreach (var textChunk in textChunks)
-                        {
-                            // Prepend metadata header to each chunk so date queries work on all chunks
-                            var enrichedChunkContent = metadataHeader + "\n\n" + textChunk.Content;
-
-                            // Generate embedding for the enriched chunk (with metadata header)
-                            var embedding = await _embeddingService.GenerateEmbeddingAsync(enrichedChunkContent);
-
-                            // Prepare metadata for this chunk
-                            var metadata = BuildRecordMetadata(record);
-
-                            // Add chunk-specific metadata
-                            metadata["chunk_index"] = chunkIndex;
-                            metadata["chunk_sequence"] = textChunk.Sequence;
-                            metadata["total_chunks"] = textChunks.Count;
-                            metadata["token_count"] = textChunk.TokenCount;
-                            metadata["start_position"] = textChunk.StartPosition;
-                            metadata["end_position"] = textChunk.EndPosition;
-                            metadata["page_number"] = textChunk.PageNumber;
-                            metadata["chunk_content"] = textChunk.Content; // Store full chunk content for synthesis
-                            metadata["content_preview"] = textChunk.Content.Length > 100 ?
-                                textChunk.Content.Substring(0, 100) + "..." : textChunk.Content;
-
-                            // Create unique embedding ID based on URI (unique identifier)
-                            // Format: cm_record_{URI}_chunk_{chunkIndex}
-                            var embeddingId = $"{RECORD_COLLECTION_PREFIX}{record.URI}_chunk_{chunkIndex}";
-
-                            // Add to batch
-                            vectorDataList.Add(new VectorData
-                            {
-                                Id = embeddingId,
-                                Vector = embedding,
-                                Metadata = metadata
-                            });
-
-                            chunkIndex++;
-                        }
-
-                        processedCount++;
-
-                        _logger.LogInformation("✅ RECORD PROCESSED SUCCESSFULLY");
-                        _logger.LogInformation("   • Total Embeddings Generated: {EmbeddingCount}", textChunks.Count);
-                        _logger.LogInformation("   • Embeddings in Batch Queue: {QueueSize}", vectorDataList.Count);
-                        _logger.LogInformation("");
-
-                        // Save in batches of 50 to avoid memory issues
-                        if (vectorDataList.Count >= 50)
-                        {
-                            _logger.LogInformation("💾 Batch size reached (50+ embeddings). Saving to PostgreSQL...");
-                            await _pgVectorService.SaveEmbeddingsBatchAsync(vectorDataList);
-                            _logger.LogInformation("✅ Batch saved successfully. Queue cleared.");
-                            _logger.LogInformation("");
-                            vectorDataList.Clear();
+                            pageFailed++;
+                            failedRecords.Add((result.uri, result.title, result.error ?? "Unknown error"));
                         }
                     }
-                    catch (Exception ex)
+
+                    totalProcessed += recordsToProcess.Count;
+                    totalSuccess += pageSuccess;
+                    totalFailed += pageFailed;
+
+                    // Save page vectors in batch
+                    if (pageVectors.Any())
                     {
-                        failedCount++;
-                        failedRecords.Add((record.URI, record.Title ?? "Unknown", ex.Message));
-
-                        // Log to separate failed records file using enriched properties
-                        _logger.LogError(ex, "❌ FAILED to process record {RecordUri} - {RecordTitle}. Error: {ErrorMessage}. {FailedRecord}",
-                            record.URI, record.Title ?? "Unknown", ex.Message, true);
+                        _logger.LogInformation("💾 Saving {Count} embeddings from this page to PostgreSQL...", pageVectors.Count);
+                        await _pgVectorService.SaveEmbeddingsBatchAsync(pageVectors);
+                        _logger.LogInformation("✅ Page embeddings saved successfully");
                     }
-                }
 
-                // Save remaining embeddings
-                if (vectorDataList.Any())
-                {
-                    _logger.LogInformation("💾 Saving final batch of {Count} embeddings to PostgreSQL", vectorDataList.Count);
-                    await _pgVectorService.SaveEmbeddingsBatchAsync(vectorDataList);
+                    _logger.LogInformation("📊 Page Results:");
+                    _logger.LogInformation("  • Processed: {Processed}", recordsToProcess.Count);
+                    _logger.LogInformation("  • Success: {Success}", pageSuccess);
+                    _logger.LogInformation("  • Failed: {Failed}", pageFailed);
+                    _logger.LogInformation("  • Embeddings Generated: {Embeddings}", pageVectors.Count);
+                    _logger.LogInformation("");
+
+                    // Save checkpoint periodically
+                    if ((pageNumber + 1) % CHECKPOINT_INTERVAL == 0)
+                    {
+                        _logger.LogInformation("💾 Saving checkpoint (page {Page})...", pageNumber + 1);
+                        await _pgVectorService.UpdateCheckpointAsync(
+                            JOB_NAME,
+                            pageNumber + 1,
+                            "Running",
+                            totalProcessed,
+                            totalSuccess,
+                            totalFailed);
+                        _logger.LogInformation("✅ Checkpoint saved");
+                    }
                 }
 
                 var endTime = DateTime.Now;
                 var duration = endTime - startTime;
 
+                // Update final checkpoint
+                await _pgVectorService.UpdateCheckpointAsync(
+                    JOB_NAME,
+                    firstPage.TotalPages,
+                    "Completed",
+                    totalProcessed,
+                    totalSuccess,
+                    totalFailed,
+                    DateTime.UtcNow);
+
                 _logger.LogInformation("========================================");
-                _logger.LogInformation("✅ BATCH EMBEDDING PROCESS COMPLETE");
+                _logger.LogInformation("✅ OPTIMIZED BATCH EMBEDDING PROCESS COMPLETE");
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("📊 SUMMARY STATISTICS:");
-                _logger.LogInformation("  • Total Records Retrieved: {Total}", recordsBeforeFilter);
-                _logger.LogInformation("  • Records Already Embedded (Skipped): {Skipped}", skippedCount);
-                _logger.LogInformation("  • New Records Processed: {Processed}", processedCount);
-                _logger.LogInformation("  • Failed Records: {Failed}", failedCount);
-                _logger.LogInformation("    ├─ Documents with Content: {DocsWithContent}", documentsWithContent);
-                _logger.LogInformation("    ├─ Records without Content: {RecordsWithoutContent}", recordsWithoutContent);
-                _logger.LogInformation("    └─ Containers (Metadata Only): {Containers}", containersProcessed);
-                _logger.LogInformation("  • Total Chunks Created: {TotalChunks}", totalChunks);
+                _logger.LogInformation("  • Total Records Retrieved: {Total}", firstPage.TotalCount);
+                _logger.LogInformation("  • Records Already Embedded (Skipped): {Skipped}", firstPage.TotalCount - totalProcessed);
+                _logger.LogInformation("  • New Records Processed: {Processed}", totalProcessed);
+                _logger.LogInformation("  • Successful: {Success}", totalSuccess);
+                _logger.LogInformation("  • Failed: {Failed}", totalFailed);
                 _logger.LogInformation("  • Total Embeddings Generated: {TotalEmbeddings}", totalChunks);
-                _logger.LogInformation("  • Average Chunks per Record: {AvgChunks:F2}", processedCount > 0 ? (double)totalChunks / processedCount : 0);
+                _logger.LogInformation("  • Average Embeddings per Record: {AvgChunks:F2}", totalSuccess > 0 ? (double)totalChunks / totalSuccess : 0);
                 _logger.LogInformation("⏱️ TIME TAKEN:");
                 _logger.LogInformation("  • Start: {StartTime}", startTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 _logger.LogInformation("  • End: {EndTime}", endTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 _logger.LogInformation("  • Duration: {Duration}", duration.ToString(@"hh\:mm\:ss"));
-                _logger.LogInformation("  • Avg Time per Record: {AvgTime:F2}s", processedCount > 0 ? duration.TotalSeconds / processedCount : 0);
+                _logger.LogInformation("  • Avg Time per Record: {AvgTime:F2}s", totalProcessed > 0 ? duration.TotalSeconds / totalProcessed : 0);
 
-                if (failedCount > 0)
+                if (totalFailed > 0)
                 {
                     _logger.LogWarning("========================================");
                     _logger.LogWarning("⚠️ FAILED RECORDS SUMMARY");
                     _logger.LogWarning("========================================");
-                    _logger.LogWarning("Total Failed: {FailedCount}", failedCount);
-                    _logger.LogWarning("Check logs/failed-records-.txt for detailed failure information");
+                    _logger.LogWarning("Total Failed: {FailedCount}", totalFailed);
                     _logger.LogWarning("Failed Records:");
-                    foreach (var failed in failedRecords)
+                    foreach (var failed in failedRecords.Take(20)) // Show first 20 only
                     {
                         _logger.LogWarning("  • URI: {Uri} | Title: {Title} | Error: {Error}",
-                            failed.uri, failed.title, failed.error.Split('\n')[0]); // First line of error only
+                            failed.uri, failed.title, failed.error.Split('\n')[0]);
+                    }
+                    if (failedRecords.Count > 20)
+                    {
+                        _logger.LogWarning("  ... and {More} more failures", failedRecords.Count - 20);
                     }
                 }
 
                 _logger.LogInformation("========================================");
 
-                return processedCount;
+                return (int)totalSuccess;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("⚠️ Job was cancelled by user or system");
+                await _pgVectorService.UpdateCheckpointAsync(
+                    JOB_NAME,
+                    0,
+                    "Cancelled",
+                    errorMessage: "Job was cancelled");
+                throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to process all records");
+                _logger.LogError(ex, "❌ Failed to process all records");
+                await _pgVectorService.UpdateCheckpointAsync(
+                    JOB_NAME,
+                    0,
+                    "Failed",
+                    errorMessage: ex.Message);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Process a single record (download, extract, chunk, embed)
+        /// Returns success status and generated vectors
+        /// </summary>
+        private async Task<(bool success, long uri, string title, string? error, List<VectorData> vectors)>
+            ProcessSingleRecordAsync(RecordViewModel record, CancellationToken cancellationToken)
+        {
+            var vectors = new List<VectorData>();
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Build text components
+                var (metadataText, documentContent) = await BuildRecordTextComponentsAsync(record);
+
+                // Combine metadata + document content
+                var fullRecordText = metadataText;
+                if (!string.IsNullOrWhiteSpace(documentContent))
+                {
+                    fullRecordText += "\n\n--- Document Content ---\n" + documentContent;
+                }
+
+                // Chunk the text
+                var textChunks = await _textChunkingService.ChunkTextAsync(fullRecordText, CHUNK_SIZE, CHUNK_OVERLAP);
+
+                // Build metadata header
+                var metadataHeader = BuildChunkMetadataHeader(record);
+
+                // Generate embeddings for each chunk
+                int chunkIndex = 0;
+                foreach (var textChunk in textChunks)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    // Prepend metadata header to chunk
+                    var enrichedChunkContent = metadataHeader + "\n\n" + textChunk.Content;
+
+                    // Generate embedding
+                    var embedding = await _embeddingService.GenerateEmbeddingAsync(enrichedChunkContent);
+
+                    // Prepare metadata
+                    var metadata = BuildRecordMetadata(record);
+                    metadata["chunk_index"] = chunkIndex;
+                    metadata["chunk_sequence"] = textChunk.Sequence;
+                    metadata["total_chunks"] = textChunks.Count;
+                    metadata["token_count"] = textChunk.TokenCount;
+                    metadata["start_position"] = textChunk.StartPosition;
+                    metadata["end_position"] = textChunk.EndPosition;
+                    metadata["page_number"] = textChunk.PageNumber;
+                    metadata["chunk_content"] = textChunk.Content;
+                    metadata["content_preview"] = textChunk.Content.Length > 100 ?
+                        textChunk.Content.Substring(0, 100) + "..." : textChunk.Content;
+
+                    var embeddingId = $"{RECORD_COLLECTION_PREFIX}{record.URI}_chunk_{chunkIndex}";
+
+                    vectors.Add(new VectorData
+                    {
+                        Id = embeddingId,
+                        Vector = embedding,
+                        Metadata = metadata
+                    });
+
+                    chunkIndex++;
+                }
+
+                return (true, record.URI, record.Title ?? "Unknown", null, vectors);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Failed to process record {URI} - {Title}", record.URI, record.Title ?? "Unknown");
+                return (false, record.URI, record.Title ?? "Unknown", ex.Message, vectors);
             }
         }
 

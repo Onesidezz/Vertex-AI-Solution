@@ -15,6 +15,7 @@ public class DocumentProcessingDbContext : DbContext
     }
 
     public DbSet<Embedding> Embeddings { get; set; } = null!;
+    public DbSet<SyncCheckpoint> SyncCheckpoints { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,6 +25,7 @@ public class DocumentProcessingDbContext : DbContext
         modelBuilder.HasPostgresExtension("vector");
 
         ConfigureEmbeddingEntity(modelBuilder);
+        ConfigureSyncCheckpointEntity(modelBuilder);
     }
 
     private static void ConfigureEmbeddingEntity(ModelBuilder modelBuilder)
@@ -121,5 +123,48 @@ public class DocumentProcessingDbContext : DbContext
         // Gemini embeddings are 3072 dimensions
         // Vector search will still work (using sequential scan initially)
         // Index can be added manually after data is loaded or when pgvector supports >2000 dims
+    }
+
+    private static void ConfigureSyncCheckpointEntity(ModelBuilder modelBuilder)
+    {
+        var entity = modelBuilder.Entity<SyncCheckpoint>();
+
+        entity.ToTable("SyncCheckpoints");
+
+        entity.HasKey(e => e.Id);
+
+        entity.Property(e => e.Id)
+            .ValueGeneratedOnAdd();
+
+        entity.Property(e => e.JobName)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        entity.Property(e => e.Status)
+            .IsRequired()
+            .HasMaxLength(50)
+            .HasDefaultValue("Completed");
+
+        entity.Property(e => e.ErrorMessage)
+            .HasColumnType("text");
+
+        entity.Property(e => e.CreatedAt)
+            .IsRequired()
+            .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+        entity.Property(e => e.UpdatedAt)
+            .IsRequired()
+            .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+        // Create indexes
+        entity.HasIndex(e => e.JobName)
+            .IsUnique()
+            .HasDatabaseName("IX_SyncCheckpoints_JobName");
+
+        entity.HasIndex(e => e.Status)
+            .HasDatabaseName("IX_SyncCheckpoints_Status");
+
+        entity.HasIndex(e => e.LastSyncDate)
+            .HasDatabaseName("IX_SyncCheckpoints_LastSyncDate");
     }
 }

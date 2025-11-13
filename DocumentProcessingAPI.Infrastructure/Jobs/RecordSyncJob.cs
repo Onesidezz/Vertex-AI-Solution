@@ -50,8 +50,8 @@ namespace DocumentProcessingAPI.Infrastructure.Jobs
 
                 _logger.LogInformation("📋 Processing records with search criteria: {SearchString}", searchString);
 
-                // Process all records from Content Manager
-                var processedCount = await _recordEmbeddingService.ProcessAllRecordsAsync(searchString);
+                // Process all records from Content Manager with cancellation support
+                var processedCount = await _recordEmbeddingService.ProcessAllRecordsAsync(searchString, context.CancellationToken);
 
                 var duration = DateTime.UtcNow - context.FireTimeUtc;
 
@@ -71,6 +71,27 @@ namespace DocumentProcessingAPI.Infrastructure.Jobs
                     CompletedAt = DateTime.UtcNow,
                     Message = $"Successfully processed {processedCount} records"
                 };
+            }
+            catch (OperationCanceledException ex)
+            {
+                var duration = DateTime.UtcNow - context.FireTimeUtc;
+
+                _logger.LogWarning("⚠️ Content Manager Record Sync Job was cancelled");
+                _logger.LogWarning("Duration before cancellation: {Duration}", duration);
+
+                // Store cancellation in job context
+                context.Result = new JobExecutionResult
+                {
+                    Success = false,
+                    RecordsProcessed = 0,
+                    Duration = duration,
+                    CompletedAt = DateTime.UtcNow,
+                    Message = "Job was cancelled",
+                    ErrorDetails = ex.ToString()
+                };
+
+                // Don't refire - cancellation is intentional
+                throw new JobExecutionException(ex, refireImmediately: false);
             }
             catch (Exception ex)
             {

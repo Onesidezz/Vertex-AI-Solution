@@ -698,6 +698,123 @@ public class PgVectorService
         }
     }
 
+    // ============================================================
+    // CHECKPOINT MANAGEMENT METHODS
+    // ============================================================
+
+    /// <summary>
+    /// Get or create checkpoint for a specific job
+    /// If checkpoint doesn't exist, creates a new one with default values
+    /// </summary>
+    public async Task<SyncCheckpoint> GetOrCreateCheckpointAsync(string jobName)
+    {
+        try
+        {
+            var checkpoint = await _context.SyncCheckpoints
+                .FirstOrDefaultAsync(c => c.JobName == jobName);
+
+            if (checkpoint == null)
+            {
+                _logger.LogInformation("📌 Creating new checkpoint for job: {JobName}", jobName);
+                checkpoint = new SyncCheckpoint
+                {
+                    JobName = jobName,
+                    LastSyncDate = null,
+                    LastProcessedPage = 0,
+                    Status = "Completed",
+                    TotalRecordsProcessed = 0,
+                    SuccessCount = 0,
+                    FailureCount = 0,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                await _context.SyncCheckpoints.AddAsync(checkpoint);
+                await _context.SaveChangesAsync();
+            }
+
+            return checkpoint;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get or create checkpoint for job: {JobName}", jobName);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Update checkpoint with current progress
+    /// Used to persist progress during job execution
+    /// </summary>
+    public async Task UpdateCheckpointAsync(
+        string jobName,
+        int lastProcessedPage,
+        string status,
+        long totalRecordsProcessed = 0,
+        long successCount = 0,
+        long failureCount = 0,
+        DateTime? lastSyncDate = null,
+        string? errorMessage = null)
+    {
+        try
+        {
+            var checkpoint = await _context.SyncCheckpoints
+                .FirstOrDefaultAsync(c => c.JobName == jobName);
+
+            if (checkpoint == null)
+            {
+                _logger.LogWarning("⚠️ Checkpoint not found for job {JobName}, creating new one", jobName);
+                checkpoint = new SyncCheckpoint
+                {
+                    JobName = jobName,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _context.SyncCheckpoints.AddAsync(checkpoint);
+            }
+
+            checkpoint.LastProcessedPage = lastProcessedPage;
+            checkpoint.Status = status;
+            checkpoint.TotalRecordsProcessed = totalRecordsProcessed;
+            checkpoint.SuccessCount = successCount;
+            checkpoint.FailureCount = failureCount;
+            checkpoint.ErrorMessage = errorMessage;
+            checkpoint.UpdatedAt = DateTime.UtcNow;
+
+            if (lastSyncDate.HasValue)
+            {
+                checkpoint.LastSyncDate = lastSyncDate.Value;
+            }
+
+            await _context.SaveChangesAsync();
+
+            _logger.LogDebug("💾 Updated checkpoint for job {JobName}: Page {Page}, Status {Status}, Success {Success}, Failure {Failure}",
+                jobName, lastProcessedPage, status, successCount, failureCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to update checkpoint for job: {JobName}", jobName);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Get checkpoint by job name
+    /// Returns null if checkpoint doesn't exist
+    /// </summary>
+    public async Task<SyncCheckpoint?> GetCheckpointAsync(string jobName)
+    {
+        try
+        {
+            return await _context.SyncCheckpoints
+                .FirstOrDefaultAsync(c => c.JobName == jobName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get checkpoint for job: {JobName}", jobName);
+            return null;
+        }
+    }
+
     // Helper methods
     private T GetMetadataValue<T>(Dictionary<string, object> metadata, string key, T? defaultValue = default)
     {

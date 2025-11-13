@@ -200,7 +200,7 @@ builder.Services.AddScoped<IWindowsAuthenticationService, WindowsAuthenticationS
 //// Add Quartz hosted service
 //builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
 
-// Add scheduler management service
+////Add scheduler management service
 //builder.Services.AddSingleton<RecordSyncSchedulerService>();
 //------------------------------------------------------------------------------------------------------------
 

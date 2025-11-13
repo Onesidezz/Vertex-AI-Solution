@@ -255,6 +255,186 @@ namespace DocumentProcessingAPI.Core.DTOs
                 throw new Exception($"Failed to execute search: {ex.Message}", ex);
             }
         }
+
+        /// <summary>
+        /// Get records with pagination support and optional change detection
+        /// Supports efficient incremental sync by filtering on DateModified
+        /// </summary>
+        /// <param name="searchString">Search string for TRIM query</param>
+        /// <param name="pageNumber">Page number (0-based)</param>
+        /// <param name="pageSize">Number of records per page</param>
+        /// <param name="lastSyncDate">Optional: Only return records modified after this date</param>
+        /// <returns>Paged result containing records and pagination metadata</returns>
+        public async Task<PagedResult<RecordViewModel>> GetRecordsPaginatedAsync(
+            string searchString,
+            int pageNumber,
+            int pageSize,
+            DateTime? lastSyncDate = null)
+        {
+            try
+            {
+                var database = await GetDatabaseAsync();
+                var currentUser = _authService.GetCurrentUsername();
+                var trimUser = database.CurrentUser?.Name ?? "Unknown";
+
+                _logger.LogInformation("📋 [TRIM] Fetching paginated records - Page: {PageNumber}, Size: {PageSize}, LastSync: {LastSyncDate}",
+                    pageNumber, pageSize, lastSyncDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "None");
+
+                // Ensure properties are loaded
+                await LoadPropertiesAsync();
+
+                // TRIM SDK will automatically filter results based on the current user's ACL permissions
+                TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+
+                // Build search string with change detection if provided
+                string finalSearchString;
+                if (lastSyncDate.HasValue)
+                {
+                    // Add DateModified filter for incremental sync
+                    // TRIM uses modifiedOn for last modified date
+                    var dateFilter = $"modifiedOn>={lastSyncDate.Value:MM/dd/yyyy}";
+
+                    if (string.IsNullOrWhiteSpace(searchString) || searchString == "*")
+                    {
+                        finalSearchString = dateFilter;
+                    }
+                    else
+                    {
+                        finalSearchString = $"{searchString} and {dateFilter}";
+                    }
+
+                    _logger.LogInformation("   🔄 Incremental sync enabled - filtering records modified since {LastSyncDate}",
+                        lastSyncDate.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(searchString) || searchString == "*")
+                    {
+                        finalSearchString = "typedTitle:*";
+                    }
+                    else
+                    {
+                        finalSearchString = searchString;
+                    }
+                }
+
+                search.SetSearchString(finalSearchString);
+                search.SetSortString("DateCreated");
+
+                // Get total count
+                long totalCount = search.Count;
+                _logger.LogInformation("   📊 Total matching records: {TotalCount}", totalCount);
+
+                // Apply pagination using LINQ Skip and Take
+                int skipCount = pageNumber * pageSize;
+
+                if (skipCount >= totalCount)
+                {
+                    // Page is beyond available records
+                    _logger.LogInformation("   ℹ️ Page {PageNumber} is beyond available records", pageNumber);
+                    return new PagedResult<RecordViewModel>
+                    {
+                        Items = new List<RecordViewModel>(),
+                        TotalCount = totalCount,
+                        PageNumber = pageNumber,
+                        PageSize = pageSize
+                    };
+                }
+
+                _logger.LogInformation("   📄 Fetching page {PageNumber}: skipping {Skip} records, taking {Take}",
+                    pageNumber + 1, skipCount, pageSize);
+
+                var listOfRecords = new List<RecordViewModel>();
+
+                // Use LINQ to skip and take records
+                var pagedRecords = search.Cast<Record>().Skip(skipCount).Take(pageSize);
+
+                foreach (Record record in pagedRecords)
+                {
+                    bool isContainer = !record.IsElectronic;
+
+                    // Gather default properties for this record
+                    var defaultProperties = new Dictionary<string, object>();
+                    foreach (var prop in recordProperties)
+                    {
+                        try
+                        {
+                            object value = null;
+                            if (prop.Value.IsAProperty)
+                            {
+                                value = record.GetProperty((PropertyIds)prop.Value.Property.Id);
+                            }
+                            else if (prop.Value.IsAField)
+                            {
+                                value = record.GetFieldValue(prop.Value.Field);
+                            }
+
+                            // Convert complex TRIM objects to serializable types
+                            if (value == null)
+                            {
+                                defaultProperties[prop.Key] = null;
+                            }
+                            else if (value is bool || value is int || value is long || value is double || value is decimal)
+                            {
+                                defaultProperties[prop.Key] = value;
+                            }
+                            else if (value is DateTime dt)
+                            {
+                                defaultProperties[prop.Key] = dt.ToString("o");
+                            }
+                            else if (value is string str)
+                            {
+                                defaultProperties[prop.Key] = str;
+                            }
+                            else
+                            {
+                                defaultProperties[prop.Key] = value.ToString();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to get property {PropertyName} for record {RecordUri}", prop.Key, record.Uri.Value);
+                            defaultProperties[prop.Key] = null;
+                        }
+                    }
+
+                    // Format DateCreated with both date AND time
+                    var dateCreatedStr = record.DateCreated.ToDateTime().ToString("MM/dd/yyyy HH:mm:ss");
+
+                    var viewModel = new RecordViewModel
+                    {
+                        URI = record.Uri.Value,
+                        Title = record.Title,
+                        Container = record.Container?.Name ?? "",
+                        AllParts = record.AllParts ?? "",
+                        Assignee = record.Assignee?.Name ?? "",
+                        DateCreated = dateCreatedStr,
+                        IsContainer = isContainer ? "Container" : "Document File",
+                        ContainerCount = isContainer ? new Dictionary<string, long>() : null,
+                        ACL = record.AccessControlList?.ToString() ?? "",
+                        DefaultProperties = defaultProperties
+                    };
+
+                    listOfRecords.Add(viewModel);
+                }
+
+                _logger.LogInformation("✅ [TRIM] Returned page {PageNumber} with {RecordCount} records (Total: {TotalCount})",
+                    pageNumber, listOfRecords.Count, totalCount);
+
+                return new PagedResult<RecordViewModel>
+                {
+                    Items = listOfRecords,
+                    TotalCount = totalCount,
+                    PageNumber = pageNumber,
+                    PageSize = pageSize
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ [TRIM] Error in GetRecordsPaginatedAsync");
+                throw new Exception($"Failed to execute paginated search: {ex.Message}", ex);
+            }
+        }
         public async Task<FileHandaler> DownloadAsync(long id)
         {
             try

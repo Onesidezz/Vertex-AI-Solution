@@ -3,6 +3,7 @@ using System;
 using DocumentProcessingAPI.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Pgvector;
@@ -12,9 +13,11 @@ using Pgvector;
 namespace DocumentProcessingAPI.Infrastructure.Migrations
 {
     [DbContext(typeof(DocumentProcessingDbContext))]
-    partial class DocumentProcessingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251113093322_AddSyncCheckpointsTable")]
+    partial class AddSyncCheckpointsTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
