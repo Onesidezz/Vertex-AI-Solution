@@ -540,12 +540,20 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 return (startDate, now);
             }
 
-            // 7. Check for "last week" (last 7 days)
+            // 7. Check for "last week" (previous calendar week: Monday to Sunday)
             if (lowerQuery.Contains("last week"))
             {
-                var startDate = now.AddDays(-7);
-                _logger.LogInformation("Date range filter: last week = {StartDate} to {EndDate}", startDate, now);
-                return (startDate, now);
+                // Get current day of week (Monday = 1, Sunday = 0)
+                var currentDayOfWeek = (int)now.DayOfWeek;
+                if (currentDayOfWeek == 0) currentDayOfWeek = 7; // Sunday = 7
+
+                // Calculate days to go back to last Monday
+                var daysToLastMonday = currentDayOfWeek + 6; // Go back to previous week's Monday
+                var lastMonday = now.AddDays(-daysToLastMonday).Date;
+                var lastSunday = lastMonday.AddDays(6).Date.AddHours(23).AddMinutes(59).AddSeconds(59);
+
+                _logger.LogInformation("Date range filter: last week = {StartDate} to {EndDate}", lastMonday, lastSunday);
+                return (lastMonday, lastSunday);
             }
 
             // 8. Check for "this week" (from Monday to today)
@@ -558,12 +566,18 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 return (startOfWeek, now);
             }
 
-            // 9. Check for "last month" (last 30 days)
+            // 9. Check for "last month" (previous calendar month)
             if (lowerQuery.Contains("last month"))
             {
-                var startDate = now.AddDays(-30);
-                _logger.LogInformation("Date range filter: last month = {StartDate} to {EndDate}", startDate, now);
-                return (startDate, now);
+                // Get first day of last month
+                var firstDayOfCurrentMonth = new DateTime(now.Year, now.Month, 1);
+                var firstDayOfLastMonth = firstDayOfCurrentMonth.AddMonths(-1);
+
+                // Get last day of last month
+                var lastDayOfLastMonth = firstDayOfCurrentMonth.AddDays(-1).Date.AddHours(23).AddMinutes(59).AddSeconds(59);
+
+                _logger.LogInformation("Date range filter: last month = {StartDate} to {EndDate}", firstDayOfLastMonth, lastDayOfLastMonth);
+                return (firstDayOfLastMonth, lastDayOfLastMonth);
             }
 
             // 10. Check for "this month" (from 1st to today)

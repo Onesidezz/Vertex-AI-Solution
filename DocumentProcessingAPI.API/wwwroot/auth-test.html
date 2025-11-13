@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows Authentication Test</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background-color: #f8d7da;
+        }
+        .success {
+            border-left-color: #28a745;
+            background-color: #d4edda;
+        }
+        .info {
+            color: #666;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔐 Windows Authentication Test Page</h1>
+
+    <div class="test-section">
+        <h2>1. Check Authentication Status</h2>
+        <p class="info">This endpoint is public and shows if you're authenticated.</p>
+        <button onclick="testEndpoint('/api/AuthTest/status', 'status')">Test Status</button>
+        <div id="status" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. Who Am I?</h2>
+        <p class="info">Get your Windows user information (requires authentication).</p>
+        <button onclick="testEndpoint('/api/AuthTest/whoami', 'whoami')">Get My Info</button>
+        <div id="whoami" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. Get Username</h2>
+        <p class="info">Get your Windows username, display name, and email.</p>
+        <button onclick="testEndpoint('/api/AuthTest/username', 'username')">Get Username</button>
+        <div id="username" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>4. Get Windows Groups</h2>
+        <p class="info">Get all Windows groups you belong to.</p>
+        <button onclick="testEndpoint('/api/AuthTest/groups', 'groups')">Get My Groups</button>
+        <div id="groups" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>5. Check Group Membership</h2>
+        <p class="info">Check if you're in a specific Windows group.</p>
+        <input type="text" id="groupName" placeholder="Enter group name (e.g., Administrators)" style="padding: 10px; width: 300px; margin-right: 10px;">
+        <button onclick="checkGroup()">Check Group</button>
+        <div id="checkgroup" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>6. Public Endpoint (No Auth)</h2>
+        <p class="info">This endpoint doesn't require authentication.</p>
+        <button onclick="testEndpoint('/api/AuthTest/public', 'public')">Test Public Endpoint</button>
+        <div id="public" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>7. Run All Tests</h2>
+        <button onclick="runAllTests()" style="background-color: #28a745;">Run All Tests</button>
+    </div>
+
+    <script>
+        async function testEndpoint(url, resultId) {
+            const resultDiv = document.getElementById(resultId);
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result';
+            resultDiv.textContent = 'Loading...';
+
+            try {
+                const response = await fetch(url, {
+                    credentials: 'include' // Important for Windows Auth
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = `Error ${response.status}: ${JSON.stringify(data, null, 2)}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function checkGroup() {
+            const groupName = document.getElementById('groupName').value;
+            if (!groupName) {
+                alert('Please enter a group name');
+                return;
+            }
+            testEndpoint(`/api/AuthTest/check-group/${encodeURIComponent(groupName)}`, 'checkgroup');
+        }
+
+        async function runAllTests() {
+            await testEndpoint('/api/AuthTest/status', 'status');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await testEndpoint('/api/AuthTest/whoami', 'whoami');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await testEndpoint('/api/AuthTest/username', 'username');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await testEndpoint('/api/AuthTest/groups', 'groups');
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await testEndpoint('/api/AuthTest/public', 'public');
+
+            alert('All tests completed! Check results above.');
+        }
+    </script>
+</body>
+</html>

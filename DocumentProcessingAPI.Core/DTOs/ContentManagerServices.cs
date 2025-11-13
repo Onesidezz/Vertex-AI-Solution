@@ -1,4 +1,5 @@
 ﻿using DocumentProcessingAPI.Core.Configuration;
+using DocumentProcessingAPI.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.IO.Compression;
@@ -10,6 +11,7 @@ namespace DocumentProcessingAPI.Core.DTOs
     {
         private readonly TrimSettings _trimSettings;
         private readonly ILogger<ContentManagerServices> _logger;
+        private readonly IWindowsAuthenticationService _authService;
         private readonly AsyncLocal<Database> _currentDatabase;
         private Dictionary<string, PropertyOrFieldDef> recordProperties = new Dictionary<string, PropertyOrFieldDef>();
         private Dictionary<string, string> propertyInternalNames = new Dictionary<string, string>();
@@ -17,10 +19,14 @@ namespace DocumentProcessingAPI.Core.DTOs
         private string _storedWorkgroupUrl;
         private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
-        public ContentManagerServices(IOptions<TrimSettings> trimSettings, ILogger<ContentManagerServices> logger)
+        public ContentManagerServices(
+            IOptions<TrimSettings> trimSettings,
+            ILogger<ContentManagerServices> logger,
+            IWindowsAuthenticationService authService)
         {
             _trimSettings = trimSettings.Value ?? throw new ArgumentNullException(nameof(trimSettings));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _authService = authService ?? throw new ArgumentNullException(nameof(authService));
             _currentDatabase = new AsyncLocal<Database>();
         }
 
@@ -40,12 +46,39 @@ namespace DocumentProcessingAPI.Core.DTOs
                     return _currentDatabase.Value;
                 }
 
+                // Get current Windows user
+                var currentUsername = _authService.GetCurrentUsername();
+
+                _logger.LogInformation("🔐 [TRIM] Connecting to Content Manager as user: {Username}", currentUsername ?? "Anonymous");
+
                 var database = new Database()
                 {
                     Id = _trimSettings.DataSetId,
                     WorkgroupServerURL = _trimSettings.WorkgroupServerUrl
                 };
+
+
+                database.TrustedUser = currentUsername; 
                 database.Connect();
+
+                // Verify connection
+                if (database.IsConnected)
+                {
+                    var connectedUser = database.CurrentUser?.Name ?? "Unknown";
+                    _logger.LogInformation("✅ [TRIM] Connected successfully. Current TRIM user: {TrimUser}", connectedUser);
+
+                    if (currentUsername != null && !connectedUser.Equals(currentUsername, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("⚠️ [TRIM] Windows user ({WindowsUser}) differs from TRIM user ({TrimUser})",
+                            currentUsername, connectedUser);
+                    }
+                }
+                else
+                {
+                    _logger.LogError("❌ [TRIM] Database connection failed");
+                    throw new Exception("Failed to connect to TRIM Content Manager");
+                }
+
                 _currentDatabase.Value = database;
                 return database;
             }
@@ -100,12 +133,19 @@ namespace DocumentProcessingAPI.Core.DTOs
             try
             {
                 var database = await GetDatabaseAsync();
+                var currentUser = _authService.GetCurrentUsername();
+                var trimUser = database.CurrentUser?.Name ?? "Unknown";
+
+                _logger.LogInformation("📋 [TRIM] Fetching records for user: {WindowsUser} (TRIM: {TrimUser}) with search: {SearchString}",
+                    currentUser, trimUser, searchString);
+
                 long totalRecords = 0;
                 bool useEstimatedCount = (searchString == "*" || string.IsNullOrWhiteSpace(searchString));
 
                 // Ensure properties are loaded
                 await LoadPropertiesAsync();
 
+                // TRIM SDK will automatically filter results based on the current user's ACL permissions
                 TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
 
                 if (useEstimatedCount)
@@ -204,11 +244,14 @@ namespace DocumentProcessingAPI.Core.DTOs
                     }
                 }
 
+                _logger.LogInformation("✅ [TRIM] Returned {RecordCount} records accessible to user {Username} (ACL-filtered by TRIM SDK)",
+                    listOfRecords.Count, currentUser);
+
                 return listOfRecords;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in GetRecordsAsync");
+                _logger.LogError(ex, "❌ [TRIM] Error in GetRecordsAsync for user {Username}", _authService.GetCurrentUsername());
                 throw new Exception($"Failed to execute search: {ex.Message}", ex);
             }
         }

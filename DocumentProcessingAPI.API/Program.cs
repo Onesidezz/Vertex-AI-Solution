@@ -1,9 +1,12 @@
 using AspNetCoreRateLimit;
+using DocumentProcessingAPI.API.Middleware;
 using DocumentProcessingAPI.Core.Configuration;
 using DocumentProcessingAPI.Core.DTOs;
 using DocumentProcessingAPI.Core.Interfaces;
+using DocumentProcessingAPI.Infrastructure.Auth;
 using DocumentProcessingAPI.Infrastructure.Data;
 using DocumentProcessingAPI.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.EntityFrameworkCore;
 using Quartz;
 using Serilog;
@@ -35,6 +38,62 @@ builder.Services.AddControllersWithViews() // Changed from AddControllers() to s
         options.JsonSerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
         options.JsonSerializerOptions.MaxDepth = 64;
     });
+
+// Windows Authentication - conditionally enabled via configuration
+var enableWindowsAuth = builder.Configuration.GetValue<bool>("Authentication:EnableWindowsAuthentication", false);
+
+if (enableWindowsAuth)
+{
+    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme)
+        .AddNegotiate(options =>
+        {
+            // Log authentication events
+            options.Events = new Microsoft.AspNetCore.Authentication.Negotiate.NegotiateEvents
+            {
+                OnAuthenticated = context =>
+                {
+                    var username = context.Principal?.Identity?.Name ?? "Unknown";
+                    var authType = context.Principal?.Identity?.AuthenticationType ?? "Unknown";
+                    Log.Information("✅ [AUTH SUCCESS] User authenticated: {Username} using {AuthType}",
+                        username, authType);
+                    return Task.CompletedTask;
+                },
+                OnAuthenticationFailed = context =>
+                {
+                    Log.Error("❌ [AUTH FAILED] Authentication failed for {Path}: {Error}",
+                        context.Request.Path, context.Exception?.Message ?? "Unknown error");
+                    return Task.CompletedTask;
+                },
+                OnChallenge = context =>
+                {
+                    if (!context.Handled)
+                    {
+                        Log.Warning("🔒 [AUTH CHALLENGE] Authentication challenge issued for: {Method} {Path}",
+                            context.Request.Method, context.Request.Path);
+                    }
+                    return Task.CompletedTask;
+                }
+            };
+        });
+
+    builder.Services.AddAuthorization(options =>
+    {
+        // Require authenticated users for ALL endpoints by default
+        options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .Build();
+    });
+
+    Log.Information("✅ Windows Authentication enabled - All endpoints require authentication");
+}
+else
+{
+    Log.Information("Windows Authentication disabled");
+}
+
+// HttpContext accessor for Windows authentication
+builder.Services.AddHttpContextAccessor();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -72,15 +131,9 @@ builder.Services.AddDbContext<DocumentProcessingDbContext>(options =>
     // Use PostgreSQL for embeddings with pgvector support
     options.UseNpgsql(builder.Configuration.GetConnectionString("PostgresConnection"),
         npgsqlOptions => npgsqlOptions.UseVector());
-
-    // Optionally also configure SQL Server if you want to keep document management
-    // options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
-// Vertex AI configuration
-// Uses Service Account Key authentication (JSON key file)
-// Configure VertexAI:ServiceAccountKeyPath in appsettings.json
-// Both REST API and gRPC SDK use the same service account credentials
+
 
 // File System Abstraction
 builder.Services.AddSingleton<IFileSystem, FileSystem>();
@@ -112,6 +165,9 @@ builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServic
 
 // AI Record Services (Summary and Q&A using Gemini)
 builder.Services.AddScoped<IAIRecordService, AIRecordService>();
+
+// Windows Authentication Service
+builder.Services.AddScoped<IWindowsAuthenticationService, WindowsAuthenticationService>();
 
 // Quartz Scheduler for Content Manager Record Sync----------------------------------------------------------
 //builder.Services.AddQuartz(q =>
@@ -243,7 +299,13 @@ app.UseCors();
 app.UseIpRateLimiting();
 
 app.UseRouting();
+
+// Authentication must come before Authorization
+app.UseAuthentication();
 app.UseAuthorization();
+
+// Add authentication logging middleware (after auth/authz so we can see the authenticated user)
+app.UseAuthenticationLogging();
 
 // Health Checks
 app.MapHealthChecks("/health");
