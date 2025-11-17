@@ -795,6 +795,34 @@
             100% { transform: rotate(360deg); }
         }
 
+        /* Inline Search Loader */
+        .search-loader {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border-left: 4px solid #143d78;
+            border-radius: 6px;
+            font-size: 14px;
+            color: #143d78;
+            font-weight: 500;
+            margin-top: 12px;
+        }
+
+        .search-loader.show {
+            display: flex;
+        }
+
+        .search-loader-spinner {
+            border: 2px solid rgba(20, 61, 120, 0.2);
+            border-radius: 50%;
+            border-top: 2px solid #143d78;
+            width: 18px;
+            height: 18px;
+            animation: spin 0.8s linear infinite;
+        }
+
         /* Overview Content */
         .overview-content {
             display: none;
@@ -1517,6 +1545,12 @@
             </button>
         </form>
 
+        <!-- Search Loader Indicator -->
+        <div class="search-loader" id="searchLoader">
+            <div class="search-loader-spinner"></div>
+            <span>Searching records...</span>
+        </div>
+
         <!-- Metadata Filters (outside form for styling) -->
         <div class="metadata-filters">
             <div class="metadata-toggle" onclick="toggleMetadataFields()">
@@ -1872,6 +1906,9 @@
 
             // Set the advanced filter flag
             $('#useAdvancedFilter').val(hasAdvancedFilters ? 'true' : 'false');
+
+            // Show the loader indicator
+            $('#searchLoader').addClass('show');
         });
 
         // Clear search function
@@ -1897,6 +1934,9 @@
             document.getElementById('hiddenDateTo').value = '';
             document.getElementById('hiddenContentSearch').value = '';
             document.getElementById('useAdvancedFilter').value = 'false';
+
+            // Hide loader
+            $('#searchLoader').removeClass('show');
 
             // Collapse advanced filters section
             const fields = document.getElementById('metadataFields');

@@ -815,6 +815,163 @@ public class PgVectorService
         }
     }
 
+    /// <summary>
+    /// Find the single most relevant chunk for a query using semantic search
+    /// Used for context window approach in Q&A functionality
+    /// </summary>
+    /// <param name="queryEmbedding">The query embedding vector</param>
+    /// <param name="recordUri">Filter to specific record URI</param>
+    /// <param name="threshold">Minimum similarity threshold (default 0.2)</param>
+    /// <returns>The most relevant Embedding entity, or null if none found</returns>
+    public async Task<Embedding?> FindMostRelevantChunkAsync(
+        float[] queryEmbedding,
+        long recordUri,
+        float threshold = 0.2f)
+    {
+        try
+        {
+            _logger.LogDebug("🔍 Finding most relevant chunk for record URI: {RecordUri}", recordUri);
+
+            var queryVector = new Vector(queryEmbedding);
+
+            // Find the single most relevant chunk with distance calculation in SQL query
+            var result = await _context.Embeddings
+                .Where(e => e.RecordUri == recordUri)
+                .OrderBy(e => e.Vector.CosineDistance(queryVector))
+                .Select(e => new
+                {
+                    Embedding = e,
+                    Distance = e.Vector.CosineDistance(queryVector) // Calculate in SQL
+                })
+                .FirstOrDefaultAsync();
+
+            if (result == null)
+            {
+                _logger.LogWarning("⚠️ No chunks found for record URI: {RecordUri}", recordUri);
+                return null;
+            }
+
+            // Calculate similarity (1 - distance) in C# after query execution
+            var similarity = (float)(1.0 - result.Distance);
+
+            if (similarity < threshold)
+            {
+                _logger.LogWarning("⚠️ Best chunk has similarity {Similarity:F3} which is below threshold {Threshold}",
+                    similarity, threshold);
+                return null;
+            }
+
+            _logger.LogInformation("✅ Found most relevant chunk: Sequence={ChunkSequence}, Page={PageNumber}, Index={ChunkIndex}, Similarity={Similarity:F3}",
+                result.Embedding.ChunkSequence, result.Embedding.PageNumber, result.Embedding.ChunkIndex, similarity);
+
+            return result.Embedding;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to find most relevant chunk for record URI: {RecordUri}", recordUri);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Find the most relevant chunk using PostgreSQL Full-Text Search (no embeddings required)
+    /// Cost-effective alternative to semantic search - uses built-in PostgreSQL text search
+    /// </summary>
+    /// <param name="searchText">The search query text</param>
+    /// <param name="recordUri">Filter to specific record URI</param>
+    /// <returns>The most relevant Embedding entity, or null if none found</returns>
+    public async Task<Embedding?> FindMostRelevantChunkByTextSearchAsync(
+        string searchText,
+        long recordUri)
+    {
+        try
+        {
+            _logger.LogDebug("🔍 Finding most relevant chunk using full-text search for record URI: {RecordUri}", recordUri);
+            _logger.LogDebug("   Search text: {SearchText}", searchText);
+
+            // Clean search text - remove special characters and prepare for text search
+            var cleanedSearch = searchText
+                .Replace("'", "")
+                .Replace("\"", "")
+                .Replace("?", "")
+                .Replace("!", "")
+                .Trim();
+
+            if (string.IsNullOrWhiteSpace(cleanedSearch))
+            {
+                _logger.LogWarning("⚠️ Search text is empty after cleaning");
+                return null;
+            }
+
+            // Use PostgreSQL full-text search with ts_rank for relevance scoring
+            // to_tsvector converts the chunk content to text search vector
+            // to_tsquery converts the search text to a query
+            // ts_rank scores the relevance
+            var result = await _context.Embeddings
+                .Where(e => e.RecordUri == recordUri)
+                .Where(e => EF.Functions.ToTsVector("english", e.ChunkContent)
+                    .Matches(EF.Functions.WebSearchToTsQuery("english", cleanedSearch)))
+                .OrderByDescending(e => EF.Functions.ToTsVector("english", e.ChunkContent)
+                    .Rank(EF.Functions.WebSearchToTsQuery("english", cleanedSearch)))
+                .FirstOrDefaultAsync();
+
+            if (result == null)
+            {
+                _logger.LogWarning("⚠️ No matching chunk found using full-text search for record URI: {RecordUri}", recordUri);
+                return null;
+            }
+
+            _logger.LogInformation("✅ Found matching chunk using full-text search: Sequence={ChunkSequence}, Page={PageNumber}, Index={ChunkIndex}",
+                result.ChunkSequence, result.PageNumber, result.ChunkIndex);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to find chunk using full-text search for record URI: {RecordUri}", recordUri);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get chunks within a ChunkSequence range for a specific record
+    /// Used for context window approach (e.g., get 3 chunks before and after)
+    /// ChunkSequence is more accurate than PageNumber for maintaining document order
+    /// </summary>
+    /// <param name="recordUri">Filter to specific record URI</param>
+    /// <param name="minSequence">Minimum chunk sequence number (inclusive)</param>
+    /// <param name="maxSequence">Maximum chunk sequence number (inclusive)</param>
+    /// <returns>List of embeddings ordered by ChunkSequence</returns>
+    public async Task<List<Embedding>> GetChunksBySequenceRangeAsync(
+        long recordUri,
+        int minSequence,
+        int maxSequence)
+    {
+        try
+        {
+            _logger.LogDebug("📄 Getting chunks for record {RecordUri}, sequences {MinSeq}-{MaxSeq}",
+                recordUri, minSequence, maxSequence);
+
+            var chunks = await _context.Embeddings
+                .Where(e => e.RecordUri == recordUri &&
+                           e.ChunkSequence >= minSequence &&
+                           e.ChunkSequence <= maxSequence)
+                .OrderBy(e => e.ChunkSequence)
+                .ToListAsync();
+
+            _logger.LogInformation("✅ Retrieved {Count} chunks from sequences {MinSeq}-{MaxSeq}",
+                chunks.Count, minSequence, maxSequence);
+
+            return chunks;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get chunks for record {RecordUri}, sequences {MinSeq}-{MaxSeq}",
+                recordUri, minSequence, maxSequence);
+            return new List<Embedding>();
+        }
+    }
+
     // Helper methods
     private T GetMetadataValue<T>(Dictionary<string, object> metadata, string key, T? defaultValue = default)
     {

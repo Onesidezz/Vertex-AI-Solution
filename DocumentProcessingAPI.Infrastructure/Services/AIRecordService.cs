@@ -16,6 +16,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         private readonly PgVectorService _pgVectorService;
         private readonly IRecordSearchGoogleServices _googleServices;
         private readonly IDocumentProcessor _documentProcessor;
+        private readonly IEmbeddingService _embeddingService;
         private readonly ILogger<AIRecordService> _logger;
 
         public AIRecordService(
@@ -23,12 +24,14 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             PgVectorService pgVectorService,
             IRecordSearchGoogleServices googleServices,
             IDocumentProcessor documentProcessor,
+            IEmbeddingService embeddingService,
             ILogger<AIRecordService> logger)
         {
             _contentManagerServices = contentManagerServices;
             _pgVectorService = pgVectorService;
             _googleServices = googleServices;
             _documentProcessor = documentProcessor;
+            _embeddingService = embeddingService;
             _logger = logger;
         }
 
@@ -136,7 +139,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         }
 
         /// <summary>
-        /// Ask a question about a specific record using Gemini AI
+        /// Ask a question about a specific record using Gemini AI with semantic search + context window approach
+        /// Uses semantic search to find the most relevant chunk (1 embedding generation per question)
+        /// Then retrieves surrounding context (3 chunks before/after based on ChunkSequence)
         /// </summary>
         public async Task<string> AskAboutRecordAsync(long recordUri, string question)
         {
@@ -150,26 +155,48 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     return "Please provide a question.";
                 }
 
-                // Get record embeddings from PostgreSQL
-                var embeddings = await _pgVectorService.GetPointIdsByRecordUriAsync(recordUri);
+                // STEP 1: Generate embedding for the question (only 1 API call per question!)
+                _logger.LogInformation("   🔍 Generating embedding for question (semantic search)");
+                var questionEmbedding = await _embeddingService.GenerateEmbeddingAsync(question);
 
-                if (!embeddings.Any())
+                // STEP 2: Find the most relevant chunk using semantic search against existing embeddings
+                _logger.LogInformation("   🎯 Finding most relevant chunk using semantic search");
+                var relevantChunk = await _pgVectorService.FindMostRelevantChunkAsync(
+                    questionEmbedding,
+                    recordUri,
+                    threshold: 0.2f);
+
+                if (relevantChunk == null)
                 {
-                    _logger.LogWarning("⚠️ No embeddings found for record URI: {RecordUri}", recordUri);
-                    return "No data found for this record. Please ensure the record has been processed and embedded.";
+                    _logger.LogWarning("⚠️ No relevant content found for question");
+                    return "No relevant information found for your question in this record. Please try rephrasing your question.";
                 }
 
-                // Get the first embedding to extract metadata
-                var firstEmbedding = await _pgVectorService.GetEmbeddingAsync(embeddings.First());
+                // STEP 3: Get metadata from relevant chunk
+                _logger.LogInformation("   📋 Most relevant chunk: Sequence {ChunkSequence}, Page {PageNumber}, Index {ChunkIndex}",
+                    relevantChunk.ChunkSequence, relevantChunk.PageNumber, relevantChunk.ChunkIndex);
 
-                if (firstEmbedding == null)
+                // STEP 4: Calculate sequence range (3 chunks before and after)
+                var targetSequence = relevantChunk.ChunkSequence;
+                var minSequence = Math.Max(0, targetSequence - 3);
+                var maxSequence = targetSequence + 3;
+
+                _logger.LogInformation("   📖 Retrieving context window: Sequences {MinSeq} to {MaxSeq}",
+                    minSequence, maxSequence);
+
+                // STEP 5: Get all chunks in the sequence range
+                var contextChunks = await _pgVectorService.GetChunksBySequenceRangeAsync(
+                    recordUri,
+                    minSequence,
+                    maxSequence);
+
+                if (!contextChunks.Any())
                 {
-                    return "Unable to retrieve record data.";
+                    _logger.LogWarning("⚠️ No chunks found in sequence range {MinSeq}-{MaxSeq}", minSequence, maxSequence);
+                    return "Unable to retrieve document content. Please try again.";
                 }
 
-                var metadata = firstEmbedding.Value.metadata;
-
-                // Build comprehensive record context
+                // STEP 6: Build the prompt with metadata and context
                 var contextBuilder = new StringBuilder();
                 contextBuilder.AppendLine("You are a helpful AI assistant answering questions about a Content Manager record.");
                 contextBuilder.AppendLine();
@@ -177,54 +204,63 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 contextBuilder.AppendLine();
                 contextBuilder.AppendLine("RECORD INFORMATION:");
                 contextBuilder.AppendLine("==================");
-                contextBuilder.AppendLine($"Record URI: {GetMetadataValue(metadata, "record_uri", recordUri)}");
-                contextBuilder.AppendLine($"Title: {GetMetadataValue(metadata, "record_title", "Unknown")}");
-                contextBuilder.AppendLine($"Date Created: {GetMetadataValue(metadata, "date_created", "Unknown")}");
-                contextBuilder.AppendLine($"Record Type: {GetMetadataValue(metadata, "record_type", "Unknown")}");
-                contextBuilder.AppendLine($"Container: {GetMetadataValue(metadata, "container", "N/A")}");
-                contextBuilder.AppendLine($"Assignee: {GetMetadataValue(metadata, "assignee", "N/A")}");
-                contextBuilder.AppendLine($"File Type: {GetMetadataValue(metadata, "file_type", "N/A")}");
+                contextBuilder.AppendLine($"Record URI: {relevantChunk.RecordUri}");
+                contextBuilder.AppendLine($"Title: {relevantChunk.RecordTitle ?? "Unknown"}");
+                contextBuilder.AppendLine($"Date Created: {relevantChunk.DateCreated?.ToString("yyyy-MM-dd") ?? "Unknown"}");
+                contextBuilder.AppendLine($"Record Type: {relevantChunk.RecordType ?? "Unknown"}");
+                contextBuilder.AppendLine($"Container: {relevantChunk.Container ?? "N/A"}");
+                contextBuilder.AppendLine($"Assignee: {relevantChunk.Assignee ?? "N/A"}");
                 contextBuilder.AppendLine();
 
-                // Collect all chunk content
-                contextBuilder.AppendLine("DOCUMENT CONTENT:");
+                // STEP 7: Add document content with context window
+                contextBuilder.AppendLine("DOCUMENT CONTENT (Context Window):");
                 contextBuilder.AppendLine("==================");
+                contextBuilder.AppendLine($"Note: Showing {contextChunks.Count} chunks from sequences {minSequence}-{maxSequence}");
+                contextBuilder.AppendLine($"Most relevant section is marked below.");
+                contextBuilder.AppendLine();
 
-                var allChunks = new List<string>();
-                foreach (var embeddingId in embeddings.Take(50)) // Limit to first 50 chunks
+                // Add chunks in order, highlighting the most relevant one
+                foreach (var chunk in contextChunks)
                 {
-                    var embedding = await _pgVectorService.GetEmbeddingAsync(embeddingId);
-                    if (embedding.HasValue && embedding.Value.metadata.ContainsKey("chunk_content"))
+                    var isRelevant = chunk.Id == relevantChunk.Id;
+
+                    if (isRelevant)
                     {
-                        var chunkContent = embedding.Value.metadata["chunk_content"]?.ToString();
-                        if (!string.IsNullOrWhiteSpace(chunkContent))
-                        {
-                            allChunks.Add(chunkContent);
-                        }
+                        contextBuilder.AppendLine(">>> MOST RELEVANT SECTION <<<");
+                    }
+
+                    contextBuilder.AppendLine($"[Sequence {chunk.ChunkSequence}, Page {chunk.PageNumber}, Index {chunk.ChunkIndex}]");
+                    contextBuilder.AppendLine(chunk.ChunkContent);
+                    contextBuilder.AppendLine();
+
+                    if (isRelevant)
+                    {
+                        contextBuilder.AppendLine(">>> END MOST RELEVANT SECTION <<<");
+                        contextBuilder.AppendLine();
                     }
                 }
 
-                // Combine all content (limit total size)
-                var fullContent = string.Join("\n\n", allChunks);
-                if (fullContent.Length > 50000)
-                {
-                    fullContent = fullContent.Substring(0, 50000) + "\n\n... [Content truncated for length]";
-                }
-
-                contextBuilder.AppendLine(fullContent);
-                contextBuilder.AppendLine();
                 contextBuilder.AppendLine("==================");
                 contextBuilder.AppendLine();
                 contextBuilder.AppendLine("INSTRUCTIONS:");
-                contextBuilder.AppendLine("1. Answer the user's question based ONLY on the information in this record");
-                contextBuilder.AppendLine("2. Be specific and provide relevant details from the document");
-                contextBuilder.AppendLine("3. If the information is not found in the record, clearly state that");
-                contextBuilder.AppendLine("4. Keep your answer concise (2-4 sentences) but informative");
-                contextBuilder.AppendLine("5. Quote specific parts of the document when relevant");
+                contextBuilder.AppendLine("1. Answer the user's question based ONLY on the information provided above");
+                contextBuilder.AppendLine("2. Pay special attention to the MOST RELEVANT SECTION marked above");
+                contextBuilder.AppendLine("3. Use information from surrounding chunks for additional context");
+                contextBuilder.AppendLine("4. Be specific and provide relevant details from the document");
+                contextBuilder.AppendLine("5. If the information is not found in the provided content, clearly state that");
+                contextBuilder.AppendLine("6. Keep your answer concise (2-4 sentences) but informative");
+                contextBuilder.AppendLine("7. Quote specific parts of the document when relevant");
                 contextBuilder.AppendLine();
                 contextBuilder.AppendLine("ANSWER:");
 
                 var prompt = contextBuilder.ToString();
+
+                _logger.LogInformation("   📊 Context stats: {ChunkCount} chunks, {CharCount} characters, ~{TokenCount} tokens",
+                    contextChunks.Count,
+                    prompt.Length,
+                    prompt.Length / 4);
+
+                // STEP 8: Call Gemini to generate the answer
                 var answer = await _googleServices.CallGeminiModelAsync(prompt);
 
                 if (string.IsNullOrWhiteSpace(answer))

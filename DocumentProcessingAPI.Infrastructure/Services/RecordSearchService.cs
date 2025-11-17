@@ -211,6 +211,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     {
                         _logger.LogInformation("   ℹ️ Gemini returned no context keywords - using local keywords as fallback");
                         // Fallback to local keywords if Gemini returns nothing
+                        extractedKeywords.Add(startDate.HasValue.ToString());
+                        extractedKeywords.Add(endDate.HasValue.ToString());
                         geminiContextKeywords = extractedKeywords;
                     }
                 }

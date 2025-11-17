@@ -133,11 +133,10 @@ namespace DocumentProcessingAPI.Core.DTOs
             try
             {
                 var database = await GetDatabaseAsync();
-                var currentUser = _authService.GetCurrentUsername();
                 var trimUser = database.CurrentUser?.Name ?? "Unknown";
 
                 _logger.LogInformation("📋 [TRIM] Fetching records for user: {WindowsUser} (TRIM: {TrimUser}) with search: {SearchString}",
-                    currentUser, trimUser, searchString);
+                     trimUser, searchString);
 
                 long totalRecords = 0;
                 bool useEstimatedCount = (searchString == "*" || string.IsNullOrWhiteSpace(searchString));
@@ -292,7 +291,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                 {
                     // Add DateModified filter for incremental sync
                     // TRIM uses modifiedOn for last modified date
-                    var dateFilter = $"modifiedOn>={lastSyncDate.Value:MM/dd/yyyy}";
+                    var dateFilter = $"editedOn>={lastSyncDate.Value:MM/dd/yyyy}";
 
                     if (string.IsNullOrWhiteSpace(searchString) || searchString == "*")
                     {
