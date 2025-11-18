@@ -510,12 +510,12 @@ public class PgVectorService
     }
 
     /// <summary>
-    /// Search with hybrid scoring: combines vector similarity + keyword/exact match boosting
-    /// Uses Gemini-extracted keywords for intelligent boosting
+    /// Search with hybrid scoring: combines vector similarity + PostgreSQL Full-Text Search boosting
+    /// Uses websearch_to_tsquery() for intelligent query parsing (stemming, stop words, Boolean operators)
     /// </summary>
     public async Task<List<(string id, float similarity, Dictionary<string, object> metadata)>> SearchSimilarWithKeywordBoostAsync(
         float[] queryEmbedding,
-        List<string> keywords,
+        string queryText,
         int limit = 10,
         float threshold = 0.0f,
         HashSet<long>? recordUriFilter = null,
@@ -523,7 +523,7 @@ public class PgVectorService
     {
         try
         {
-            _logger.LogDebug("🔍 Hybrid search with keyword boosting using {Count} Gemini keywords", keywords?.Count ?? 0);
+            _logger.LogDebug("🔍 Hybrid search with PostgreSQL FTS using query: {Query}", queryText);
 
             // Get more results than needed for keyword boosting reranking
             var expandedLimit = Math.Min(limit * 5, recordUriFilter?.Count ?? 1000);
@@ -536,54 +536,114 @@ public class PgVectorService
                 return new List<(string, float, Dictionary<string, object>)>();
             }
 
-            // Use provided Gemini keywords (already extracted)
-            if (keywords == null || !keywords.Any())
+            // Use raw query text directly with PostgreSQL FTS
+            if (string.IsNullOrWhiteSpace(queryText))
             {
-                _logger.LogWarning("   ⚠️ No keywords provided for boosting, using semantic-only results");
+                _logger.LogWarning("   ⚠️ No query text provided for FTS boosting, using semantic-only results");
                 return semanticResults.Take(limit).ToList();
             }
 
-            _logger.LogDebug("   📋 Boosting with keywords: {Keywords}", string.Join(", ", keywords));
+            _logger.LogDebug("   📋 Boosting with PostgreSQL FTS query: {Query}", queryText);
 
-            // Apply hybrid scoring: semantic similarity + keyword match boost
+            // Escape single quotes for SQL parameter (websearch_to_tsquery will handle the rest)
+            var sanitizedQuery = queryText.Replace("'", "''");
+
+            // Get embedding IDs from semantic results
+            var embeddingIds = semanticResults.Select(r => r.id).ToList();
+
+            // Query PostgreSQL FTS scores using ts_rank() for the semantic result IDs
+            // websearch_to_tsquery() intelligently parses the query with:
+            // - Automatic stop word removal
+            // - Stemming (workflow → work, workflows)
+            // - Boolean operators (AND, OR, NOT)
+            // - Phrase matching with quotes
+            var ftsScoresSql = $@"
+                SELECT
+                    ""EmbeddingId"",
+                    ts_rank(search_vector, websearch_to_tsquery('english', @p0)) as fts_score
+                FROM ""Embeddings""
+                WHERE ""EmbeddingId"" = ANY(@p1)
+                AND search_vector @@ websearch_to_tsquery('english', @p0)";
+
+            var connection = _context.Database.GetDbConnection();
+            await connection.OpenAsync();
+
+            var ftsScores = new Dictionary<string, float>();
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = ftsScoresSql;
+
+                var p0 = command.CreateParameter();
+                p0.ParameterName = "@p0";
+                p0.Value = sanitizedQuery;
+                command.Parameters.Add(p0);
+
+                var p1 = command.CreateParameter();
+                p1.ParameterName = "@p1";
+                p1.Value = embeddingIds.ToArray();
+                command.Parameters.Add(p1);
+
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var embeddingId = reader.GetString(0);
+                        var ftsScore = reader.GetFloat(1);
+                        ftsScores[embeddingId] = ftsScore;
+                    }
+                }
+            }
+
+            await connection.CloseAsync();
+
+            _logger.LogDebug("   📊 FTS matched {Count}/{Total} semantic results", ftsScores.Count, semanticResults.Count);
+
+            // Normalize FTS scores to 0-1 range
+            var maxFtsScore = ftsScores.Values.Any() ? ftsScores.Values.Max() : 1.0f;
+            var normalizedFtsScores = ftsScores.ToDictionary(
+                kvp => kvp.Key,
+                kvp => maxFtsScore > 0 ? kvp.Value / maxFtsScore : 0f
+            );
+
+            // Apply hybrid scoring: semantic similarity + FTS score boost
             var hybridResults = semanticResults.Select(r =>
             {
                 var semanticScore = r.similarity;
 
-                // Calculate keyword matches across multiple metadata fields
-                var keywordScore = CalculateKeywordMatchScoreMultiField(
-                    r.metadata,
-                    keywords);
+                // Get normalized FTS score (0 if no FTS match)
+                var ftsScore = normalizedFtsScores.GetValueOrDefault(r.id, 0f);
 
                 // Hybrid score: weighted combination
-                var hybridScore = (semanticScore * (1 - keywordBoostWeight)) + (keywordScore * keywordBoostWeight);
+                // keywordBoostWeight controls FTS influence (default 0.3 = 30% FTS, 70% semantic)
+                var hybridScore = (semanticScore * (1 - keywordBoostWeight)) + (ftsScore * keywordBoostWeight);
 
-                return (r.id, score: hybridScore, r.metadata, originalSemanticScore: semanticScore, keywordScore);
+                return (r.id, score: hybridScore, r.metadata, originalSemanticScore: semanticScore, ftsScore);
             })
             .OrderByDescending(r => r.score)
             .Take(limit)
             .Select(r =>
             {
-                // Log significant keyword boosts
-                if (r.keywordScore > 0.5f)
+                // Log significant FTS boosts
+                if (r.ftsScore > 0.5f)
                 {
                     var uri = r.metadata.ContainsKey("record_uri") ? r.metadata["record_uri"] : "?";
-                    _logger.LogDebug("   ⬆️ Keyword boost for URI {Uri}: Semantic={Semantic:F3} → Hybrid={Hybrid:F3}",
-                        uri, r.originalSemanticScore, r.score);
+                    _logger.LogDebug("   ⬆️ FTS boost for URI {Uri}: Semantic={Semantic:F3}, FTS={Fts:F3} → Hybrid={Hybrid:F3}",
+                        uri, r.originalSemanticScore, r.ftsScore, r.score);
                 }
                 return (r.id, r.score, r.metadata);
             })
             .Where(r => r.score >= threshold)
             .ToList();
 
-            _logger.LogInformation("✅ Hybrid search returned {Count} results (from {Total} semantic results)",
-                hybridResults.Count, semanticResults.Count);
+            _logger.LogInformation("✅ Hybrid FTS search returned {Count} results (from {Total} semantic results, {FtsCount} with FTS matches)",
+                hybridResults.Count, semanticResults.Count, ftsScores.Count);
 
             return hybridResults;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Failed hybrid search with keyword boosting");
+            _logger.LogError(ex, "❌ Failed hybrid search with PostgreSQL FTS");
             // Fallback to regular semantic search
             return await SearchSimilarAsync(queryEmbedding, limit, threshold, recordUriFilter);
         }
@@ -969,6 +1029,56 @@ public class PgVectorService
             _logger.LogError(ex, "❌ Failed to get chunks for record {RecordUri}, sequences {MinSeq}-{MaxSeq}",
                 recordUri, minSequence, maxSequence);
             return new List<Embedding>();
+        }
+    }
+
+    /// <summary>
+    /// Get sample embeddings for testing Lucene indexing
+    /// </summary>
+    public async Task<List<VectorData>> GetSampleEmbeddingsAsync(int limit = 100)
+    {
+        try
+        {
+            var vectorDataList = new List<VectorData>();
+
+            var embeddings = await _context.Embeddings
+                .OrderBy(e => e.Id)
+                .Take(limit)
+                .ToListAsync();
+
+            foreach (var embedding in embeddings)
+            {
+                // Build metadata dictionary from individual properties
+                var metadata = new Dictionary<string, object>
+                {
+                    ["record_uri"] = embedding.RecordUri,
+                    ["record_title"] = embedding.RecordTitle ?? "",
+                    ["date_created"] = embedding.DateCreated?.ToString("MM/dd/yyyy HH:mm:ss") ?? "",
+                    ["record_type"] = embedding.RecordType ?? "",
+                    ["container"] = embedding.Container ?? "",
+                    ["assignee"] = embedding.Assignee ?? "",
+                    ["chunk_content"] = embedding.ChunkContent ?? "",
+                    ["chunk_index"] = embedding.ChunkIndex,
+                    ["file_type"] = embedding.FileType ?? "",
+                    ["file_extension"] = embedding.FileExtension ?? "",
+                    ["document_category"] = embedding.DocumentCategory ?? ""
+                };
+
+                vectorDataList.Add(new VectorData
+                {
+                    Id = embedding.EmbeddingId,
+                    Vector = embedding.Vector.ToArray(),
+                    Metadata = metadata
+                });
+            }
+
+            _logger.LogInformation("Retrieved {Count} sample embeddings from PostgreSQL", vectorDataList.Count);
+            return vectorDataList;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get sample embeddings from PostgreSQL");
+            return new List<VectorData>();
         }
     }
 

@@ -162,4 +162,13 @@ public class Embedding
     /// Timestamp when this record was created in the database
     /// </summary>
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// PostgreSQL Full-Text Search vector (tsvector)
+    /// Auto-generated from record_title, chunk_content, and metadata fields
+    /// Used for fast keyword search with BM25-like ranking
+    /// NOTE: This column is managed by PostgreSQL triggers, not Entity Framework
+    /// </summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public string? SearchVector { get; set; }
 }

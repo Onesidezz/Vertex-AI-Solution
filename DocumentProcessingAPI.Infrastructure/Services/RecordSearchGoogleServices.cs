@@ -283,7 +283,7 @@ Now extract keywords from the QUERY above. Return ONLY the JSON array:";
             // Results are already deduplicated at this point, so we can use them directly
             var uniqueRecords = results
                 .OrderByDescending(r => r.RelevanceScore)
-                .Take(20) // Take up to 20 records for synthesis
+                .Take(20) 
                 .ToList();
 
             _logger.LogInformation("Synthesizing answer from {UniqueCount} unique records", uniqueRecords.Count);

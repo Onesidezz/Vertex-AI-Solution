@@ -1479,7 +1479,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 var dateCreated = GetMetadataValue<string>(result.metadata, "date_created");
                 if (string.IsNullOrEmpty(dateCreated))
                 {
-                    _logger.LogInformation("Record has no date_created field");
+                    _logger.LogDebug("Record has no date_created field");
                     return false;
                 }
 
@@ -1516,7 +1516,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     return false;
                 }
 
-                _logger.LogInformation("Parsed date_created: '{DateCreated}' -> {ParsedDate} (format: {Format})",
+                _logger.LogDebug("Parsed date_created: '{DateCreated}' -> {ParsedDate} (format: {Format})",
                     dateCreated, parsedDate.ToString("yyyy-MM-dd HH:mm:ss"), usedFormat);
 
                 // Apply date range filtering
@@ -1529,13 +1529,13 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     if (startDate.Value.TimeOfDay != TimeSpan.Zero)
                     {
                         withinRange &= parsedDate >= startDate.Value;
-                        _logger.LogInformation("  StartDate check: {ParsedDate} >= {StartDate} = {Result}",
+                        _logger.LogDebug("  StartDate check: {ParsedDate} >= {StartDate} = {Result}",
                             parsedDate, startDate.Value, parsedDate >= startDate.Value);
                     }
                     else
                     {
                         withinRange &= parsedDate.Date >= startDate.Value.Date;
-                        _logger.LogInformation("  StartDate check (date only): {ParsedDate} >= {StartDate} = {Result}",
+                        _logger.LogDebug("  StartDate check (date only): {ParsedDate} >= {StartDate} = {Result}",
                             parsedDate.Date, startDate.Value.Date, parsedDate.Date >= startDate.Value.Date);
                     }
                 }
@@ -1547,13 +1547,13 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     if (endDate.Value.TimeOfDay != TimeSpan.Zero)
                     {
                         withinRange &= parsedDate <= endDate.Value;
-                        _logger.LogInformation("  EndDate check: {ParsedDate} <= {EndDate} = {Result}",
+                        _logger.LogDebug("  EndDate check: {ParsedDate} <= {EndDate} = {Result}",
                             parsedDate, endDate.Value, parsedDate <= endDate.Value);
                     }
                     else
                     {
                         withinRange &= parsedDate.Date <= endDate.Value.Date;
-                        _logger.LogInformation("  EndDate check (date only): {ParsedDate} <= {EndDate} = {Result}",
+                        _logger.LogDebug("  EndDate check (date only): {ParsedDate} <= {EndDate} = {Result}",
                             parsedDate.Date, endDate.Value.Date, parsedDate.Date <= endDate.Value.Date);
                     }
                 }

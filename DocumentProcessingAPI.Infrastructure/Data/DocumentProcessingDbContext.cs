@@ -98,6 +98,9 @@ public class DocumentProcessingDbContext : DbContext
             .IsRequired()
             .HasDefaultValueSql("CURRENT_TIMESTAMP");
 
+        // NOTE: SearchVector property is marked with [NotMapped] attribute
+        // The search_vector column is managed by PostgreSQL triggers, not EF Core
+
         // Create indexes
         entity.HasIndex(e => e.EmbeddingId)
             .IsUnique()

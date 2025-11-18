@@ -117,6 +117,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 // ============================================================
                 // STEP 1: QUERY ANALYSIS & PREPARATION
                 // ============================================================
+                var step1Stopwatch = Stopwatch.StartNew();
                 _logger.LogInformation("🔍 STEP 1: Query Analysis & Preparation");
 
                 // Clean and normalize query
@@ -152,29 +153,13 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         isEarliest, isLatest);
                 }
 
-                // ============================================================
-                // STEP 1.5: SMART KEYWORD EXTRACTION (LOCAL - NO API COST)
-                // For fallback if Gemini extraction fails
-                // ============================================================
-                _logger.LogInformation("🔍 STEP 1.5: Extracting Keywords (Smart Local Extraction)");
-
-                // Extract keywords locally without Gemini API call to save costs
-                // These are used as fallback if Gemini keyword extraction fails
-                var extractedKeywords = _helperServices.ExtractSmartKeywords(query);
-
-                if (extractedKeywords.Any())
-                {
-                    _logger.LogInformation("   ✅ Extracted keywords: {Keywords}",
-                        string.Join(", ", extractedKeywords));
-                }
-                else
-                {
-                    _logger.LogInformation("   ℹ️ No specific keywords extracted");
-                }
+                step1Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 1 completed in {ElapsedMs}ms", step1Stopwatch.ElapsedMilliseconds);
 
                 // ============================================================
                 // STEP 2: SEMANTIC SEARCH WITH PGVECTOR (Embeddings-based search)
                 // ============================================================
+                var step2Stopwatch = Stopwatch.StartNew();
                 _logger.LogInformation("🔍 STEP 2: Semantic Search with pgvector");
 
                 // Dynamic search limit calculation
@@ -188,69 +173,39 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                 // Generate embedding for the semantic query
                 _logger.LogInformation("   📝 Generating embedding for semantic query");
+                var embeddingStopwatch = Stopwatch.StartNew();
                 var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(cleanQuery);
+                embeddingStopwatch.Stop();
+                _logger.LogInformation("   ⏱️ Embedding generation took {ElapsedMs}ms", embeddingStopwatch.ElapsedMilliseconds);
+
+                step2Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 2 completed in {ElapsedMs}ms", step2Stopwatch.ElapsedMilliseconds);
 
                 // ============================================================
-                // STEP 2.5: GEMINI CONTEXT EXTRACTION (FOR VECTOR BOOST ONLY)
+                // STEP 3: HYBRID SEARCH (SEMANTIC + POSTGRESQL FTS)
+                // No Gemini keyword extraction needed - PostgreSQL FTS handles it natively
                 // ============================================================
-                _logger.LogInformation("   🤖 Extracting context with Gemini for vector search boosting");
+                var step3Stopwatch = Stopwatch.StartNew();
+                _logger.LogInformation("🔍 STEP 3: Hybrid Search (Semantic + PostgreSQL FTS)");
 
-                List<string> geminiContextKeywords = new List<string>();
-                try
-                {
-                    // Use Gemini to extract contextual keywords for intelligent vector boosting
-                    // This is different from local extraction - Gemini understands intent and context
-                    geminiContextKeywords = await _googleServices.ExtractKeywordsWithGemini(cleanQuery);
-
-                    if (geminiContextKeywords.Any())
-                    {
-                        _logger.LogInformation("   ✅ Gemini extracted context keywords: {Keywords}",
-                            string.Join(", ", geminiContextKeywords));
-                    }
-                    else
-                    {
-                        _logger.LogInformation("   ℹ️ Gemini returned no context keywords - using local keywords as fallback");
-                        // Fallback to local keywords if Gemini returns nothing
-                        extractedKeywords.Add(startDate.HasValue.ToString());
-                        extractedKeywords.Add(endDate.HasValue.ToString());
-                        geminiContextKeywords = extractedKeywords;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "   ⚠️ Gemini context extraction failed - using local keywords as fallback");
-                    // Fallback to local keywords if Gemini API fails
-                    geminiContextKeywords = extractedKeywords;
-                }
-
-                // ============================================================
-                // STEP 3: HYBRID VS SEMANTIC SEARCH DECISION
-                // ============================================================
                 List<(string id, float similarity, Dictionary<string, object> metadata)> similarResults;
 
-                // Use hybrid search if we have context keywords (from Gemini or fallback)
-                if (geminiContextKeywords != null && geminiContextKeywords.Any())
-                {
-                    _logger.LogInformation("   🔀 Using HYBRID search (semantic + keyword boost) with {Count} context keywords",
-                        geminiContextKeywords.Count);
-                    similarResults = await _pgVectorService.SearchSimilarWithKeywordBoostAsync(
-                        queryEmbedding,
-                        geminiContextKeywords, // Use Gemini context keywords for intelligent boosting
-                        searchLimit,
-                        adjustedMinScore,
-                        null, // No URI filtering - full semantic search
-                        keywordBoostWeight: 0.4f); // 40% weight to keyword matching
-                }
-                else
-                {
-                    _logger.LogInformation("   🎯 Using SEMANTIC search only (no context keywords available)");
-                    // Standard semantic search for general queries
-                    similarResults = await _pgVectorService.SearchSimilarAsync(
-                        queryEmbedding,
-                        searchLimit,
-                        adjustedMinScore,
-                        null); // No URI filtering - full semantic search
-                }
+                // Always use hybrid search with PostgreSQL FTS
+                // websearch_to_tsquery() intelligently parses the query:
+                // - Removes stop words automatically
+                // - Applies stemming (workflow → work, workflows)
+                // - Supports Boolean operators (AND, OR, NOT)
+                // - Handles phrase matching with quotes
+                _logger.LogInformation("   🔀 Using HYBRID search (semantic + PostgreSQL FTS)");
+                _logger.LogInformation("   📋 FTS Query: {Query}", cleanQuery);
+
+                similarResults = await _pgVectorService.SearchSimilarWithKeywordBoostAsync(
+                    queryEmbedding,
+                    cleanQuery, // Use raw query - PostgreSQL FTS handles parsing
+                    searchLimit,
+                    adjustedMinScore,
+                    null, // No URI filtering - full semantic search
+                    keywordBoostWeight: 0.3f); // 30% weight to FTS, 70% to semantic
 
                 _logger.LogInformation("   ✅ PostgreSQL returned {Count} results", similarResults.Count);
 
@@ -275,9 +230,13 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                 _logger.LogInformation("   ✅ Filtered to {Count} Content Manager records", recordResults.Count);
 
+                step3Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 3 completed in {ElapsedMs}ms", step3Stopwatch.ElapsedMilliseconds);
+
                 // ============================================================
-                // STEP 4: APPLY POST-FILTERS
+                // STEP 4: APPLY POST-FILTERS (Date, File Type, Metadata)
                 // ============================================================
+                var step4Stopwatch = Stopwatch.StartNew();
                 _logger.LogInformation("🔍 STEP 4: Applying Post-Filters");
 
                 // Apply file type filtering if specified
@@ -297,10 +256,23 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         endDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "any");
 
                     var beforeCount = recordResults.Count;
+
+                    // Save results before applying date filter (for fallback)
+                    var resultsBeforeDateFilter = recordResults.ToList();
+
                     recordResults = _helperServices.ApplyDateRangeFilter(recordResults, startDate, endDate);
 
                     _logger.LogInformation("   ✅ After date filtering: {Count} results (filtered out {Removed})",
                         recordResults.Count, beforeCount - recordResults.Count);
+
+                    // Fallback: If date filter eliminated all results, restore pre-filter results
+                    // This handles cases where dates are content (e.g., "1876-1916") not creation date filters
+                    if (!recordResults.Any() && resultsBeforeDateFilter.Any())
+                    {
+                        _logger.LogWarning("   ⚠️ Date filter eliminated all results. Likely content dates (e.g., '1876-1916'), not creation dates.");
+                        _logger.LogWarning("   ↩️ Falling back to results before date filter ({Count} results)", resultsBeforeDateFilter.Count);
+                        recordResults = resultsBeforeDateFilter;
+                    }
                 }
 
                 // Apply additional metadata filters if provided
@@ -346,12 +318,19 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 // Take final results
                 var finalResults = deduplicatedResults.Take(topK).ToList();
 
+                step4Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 4 completed in {ElapsedMs}ms", step4Stopwatch.ElapsedMilliseconds);
+
                 // ============================================================
                 // STEP 5: APPLY ACL FILTERING
                 // Filter results based on current user's access permissions
                 // ============================================================
+                var step5Stopwatch = Stopwatch.StartNew();
                 _logger.LogInformation("🔒 STEP 5: Applying ACL Filtering");
+                _logger.LogInformation("   📊 Checking ACL for {Count} records", finalResults.Count);
                 var aclFilteredResults = await ApplyAclFilterAsync(finalResults);
+                step5Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 5 (ACL) completed in {ElapsedMs}ms", step5Stopwatch.ElapsedMilliseconds);
                 _logger.LogInformation("   ✅ ACL filtering complete: {Accessible} accessible out of {Total} results",
                     aclFilteredResults.Count, finalResults.Count);
 
@@ -368,21 +347,30 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 }).ToList();
 
                 // Generate AI synthesis of results
+                var step6Stopwatch = Stopwatch.StartNew();
                 var synthesizedAnswer = "";
                 try
                 {
+                    _logger.LogInformation("🤖 Generating AI synthesis...");
                     synthesizedAnswer = await _googleServices.SynthesizeRecordAnswerAsync(query, searchResults);
+                    step6Stopwatch.Stop();
+                    _logger.LogInformation("   ⏱️ AI Synthesis completed in {ElapsedMs}ms", step6Stopwatch.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to synthesize answer for query: {Query}", query);
+                    step6Stopwatch.Stop();
+                    _logger.LogWarning(ex, "Failed to synthesize answer for query: {Query} (took {ElapsedMs}ms)", query, step6Stopwatch.ElapsedMilliseconds);
                     synthesizedAnswer = $"Found {searchResults.Count} matching records. AI summary temporarily unavailable.";
                 }
 
                 stopwatch.Stop();
 
-                _logger.LogInformation("Search completed. Found {ResultCount} unique results in {ElapsedMs}ms",
-                    searchResults.Count, stopwatch.ElapsedMilliseconds);
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("✅ SEARCH COMPLETED - TIMING BREAKDOWN");
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("⏱️ Total Time: {TotalMs}ms ({TotalSec:F2}s)", stopwatch.ElapsedMilliseconds, stopwatch.Elapsed.TotalSeconds);
+                _logger.LogInformation("📊 Results: {ResultCount} records returned", searchResults.Count);
+                _logger.LogInformation("========================================");
 
                 return new RecordSearchResponseDto
                 {
