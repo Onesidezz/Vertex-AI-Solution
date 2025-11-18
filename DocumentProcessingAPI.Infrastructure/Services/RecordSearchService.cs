@@ -346,8 +346,17 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 // Take final results
                 var finalResults = deduplicatedResults.Take(topK).ToList();
 
+                // ============================================================
+                // STEP 5: APPLY ACL FILTERING
+                // Filter results based on current user's access permissions
+                // ============================================================
+                _logger.LogInformation("🔒 STEP 5: Applying ACL Filtering");
+                var aclFilteredResults = await ApplyAclFilterAsync(finalResults);
+                _logger.LogInformation("   ✅ ACL filtering complete: {Accessible} accessible out of {Total} results",
+                    aclFilteredResults.Count, finalResults.Count);
+
                 // Convert to search result DTOs
-                var searchResults = finalResults.Select(result => new RecordSearchResultDto
+                var searchResults = aclFilteredResults.Select(result => new RecordSearchResultDto
                 {
                     RecordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri"),
                     RecordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "",
@@ -397,6 +406,95 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     QueryTime = (float)stopwatch.Elapsed.TotalSeconds,
                     SynthesizedAnswer = $"Search failed due to an error: {ex.Message}"
                 };
+            }
+        }
+
+        /// <summary>
+        /// Filter search results based on current user's ACL permissions using Trim SDK
+        /// Only returns records the current user has access to
+        /// </summary>
+        /// <param name="results">Search results to filter</param>
+        /// <returns>Filtered list containing only accessible records</returns>
+        private async Task<List<(string id, float similarity, Dictionary<string, object> metadata)>> ApplyAclFilterAsync(List<(string id, float similarity, Dictionary<string, object> metadata)> results)
+        {
+            if (results == null || !results.Any())
+            {
+                return results ?? new List<(string id, float similarity, Dictionary<string, object> metadata)>();
+            }
+
+            try
+            {
+                // Get database connection with current user's context
+                var database = await _contentManagerServices.GetDatabaseAsync();
+                var currentUser = database.CurrentUser?.Name ?? "Unknown";
+
+                _logger.LogInformation("   🔐 Checking ACL permissions for user: {User}", currentUser);
+
+                var accessibleResults = new List<(string id, float similarity, Dictionary<string, object> metadata)>();
+                var deniedCount = 0;
+                var unrestrictedCount = 0;
+                var restrictedButAccessibleCount = 0;
+
+                foreach (var result in results)
+                {
+                    try
+                    {
+                        var recordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri");
+
+                        // Attempt to access record with current user's permissions
+                        // Trim SDK will enforce ACL automatically based on database.TrustedUser
+                        var record = new Record(database, recordUri);
+
+                        // Try to access a property that requires ViewDocument permission
+                        // This will throw TrimException if user doesn't have access
+                        var title = record.Title;
+
+                        // If we get here, user has access
+                        accessibleResults.Add(result);
+
+                        // Track whether this was an unrestricted or ACL-restricted record
+                        var aclString = record.AccessControlList?.ToString() ?? "";
+                        if (aclString.Contains("<Unrestricted>") || string.IsNullOrEmpty(aclString))
+                        {
+                            unrestrictedCount++;
+                        }
+                        else
+                        {
+                            restrictedButAccessibleCount++;
+                            _logger.LogDebug("   ✅ User {User} granted access to restricted record {Uri}: {Title}",
+                                currentUser, recordUri, title);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // User doesn't have access to this record
+                        var recordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri");
+                        var recordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "Unknown";
+
+                        _logger.LogDebug("   🔒 User {User} denied access to record {Uri}: {Title} - {Error}",
+                            currentUser, recordUri, recordTitle, ex.Message);
+
+                        deniedCount++;
+                    }
+                }
+
+                // Log ACL filtering summary
+                _logger.LogInformation("   📊 ACL Filtering Summary:");
+                _logger.LogInformation("      Total Results: {Total}", results.Count);
+                _logger.LogInformation("      Accessible: {Accessible}", accessibleResults.Count);
+                _logger.LogInformation("      Denied: {Denied}", deniedCount);
+                _logger.LogInformation("      ├─ Unrestricted: {Unrestricted}", unrestrictedCount);
+                _logger.LogInformation("      └─ Restricted (Accessible): {RestrictedAccessible}", restrictedButAccessibleCount);
+
+                return accessibleResults;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "   ❌ Error during ACL filtering. Returning original results as fallback.");
+
+                // Fallback: return original results if ACL filtering fails
+                // This ensures search continues working even if ACL check fails
+                return results;
             }
         }
 

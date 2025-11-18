@@ -244,7 +244,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                 }
 
                 _logger.LogInformation("✅ [TRIM] Returned {RecordCount} records accessible to user {Username} (ACL-filtered by TRIM SDK)",
-                    listOfRecords.Count, currentUser);
+                    listOfRecords.Count);
 
                 return listOfRecords;
             }

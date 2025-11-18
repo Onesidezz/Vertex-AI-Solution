@@ -169,6 +169,9 @@ builder.Services.AddScoped<IAIRecordService, AIRecordService>();
 // Windows Authentication Service
 builder.Services.AddScoped<IWindowsAuthenticationService, WindowsAuthenticationService>();
 
+// ACL Analysis Service (for analyzing Content Manager ACL structure)
+builder.Services.AddScoped<AclAnalysisService>();
+
 // Quartz Scheduler for Content Manager Record Sync----------------------------------------------------------
 //builder.Services.AddQuartz(q =>
 //{
