@@ -11,7 +11,9 @@ namespace DocumentProcessingAPI.Core.Interfaces
         /// <summary>
         /// Call Vertex AI Generative AI API for text generation
         /// </summary>
-        Task<string> CallGeminiModelAsync(string prompt);
+        /// <param name="prompt">The prompt to send to the model</param>
+        /// <param name="maxOutputTokens">Maximum tokens to generate (default: 512)</param>
+        Task<string> CallGeminiModelAsync(string prompt, int maxOutputTokens = 512);
 
         /// <summary>
         /// Get Google Cloud access token using gcloud CLI

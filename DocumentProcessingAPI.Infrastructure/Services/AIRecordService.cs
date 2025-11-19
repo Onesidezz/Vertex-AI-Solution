@@ -121,7 +121,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 contextBuilder.AppendLine("SUMMARY:");
 
                 var prompt = contextBuilder.ToString();
-                var summary = await _googleServices.CallGeminiModelAsync(prompt);
+                var summary = await _googleServices.CallGeminiModelAsync(prompt, maxOutputTokens: 2000);
 
                 if (string.IsNullOrWhiteSpace(summary))
                 {
@@ -261,7 +261,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     prompt.Length / 4);
 
                 // STEP 8: Call Gemini to generate the answer
-                var answer = await _googleServices.CallGeminiModelAsync(prompt);
+                var answer = await _googleServices.CallGeminiModelAsync(prompt, maxOutputTokens: 1000);
 
                 if (string.IsNullOrWhiteSpace(answer))
                 {

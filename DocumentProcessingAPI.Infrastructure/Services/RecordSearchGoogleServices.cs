@@ -17,6 +17,11 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<RecordSearchGoogleServices> _logger;
 
+        // Token caching to avoid regenerating access token on every request
+        private static string? _cachedAccessToken;
+        private static DateTime _tokenExpiration = DateTime.MinValue;
+        private static readonly SemaphoreSlim _tokenLock = new SemaphoreSlim(1, 1);
+
         public RecordSearchGoogleServices(
             IConfiguration configuration,
             ILogger<RecordSearchGoogleServices> logger)
@@ -28,7 +33,9 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         /// <summary>
         /// Call Vertex AI Generative AI API for text generation
         /// </summary>
-        public async Task<string> CallGeminiModelAsync(string prompt)
+        /// <param name="prompt">The prompt to send to the model</param>
+        /// <param name="maxOutputTokens">Maximum tokens to generate (default: 512)</param>
+        public async Task<string> CallGeminiModelAsync(string prompt, int maxOutputTokens = 512)
         {
             try
             {
@@ -72,7 +79,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         temperature = 0.7,
                         topP = 0.95,
                         topK = 40,
-                        maxOutputTokens = 8192
+                        maxOutputTokens = maxOutputTokens
                     }
                 };
 
@@ -123,9 +130,27 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
         /// <summary>
         /// Get Google Cloud access token using Service Account Key
+        /// Implements caching to avoid regenerating token on every request (tokens valid for 1 hour)
         /// </summary>
         public async Task<string> GetGoogleCloudAccessTokenAsync()
         {
+            // Check if cached token is still valid (with thread safety)
+            await _tokenLock.WaitAsync();
+            try
+            {
+                if (!string.IsNullOrEmpty(_cachedAccessToken) && DateTime.UtcNow < _tokenExpiration)
+                {
+                    _logger.LogDebug("✅ Using cached Google Cloud access token (expires in {Minutes} minutes)",
+                        (_tokenExpiration - DateTime.UtcNow).TotalMinutes);
+                    return _cachedAccessToken;
+                }
+            }
+            finally
+            {
+                _tokenLock.Release();
+            }
+
+            // Need to get new token
             try
             {
                 var serviceAccountKeyPath = _configuration["VertexAI:ServiceAccountKeyPath"];
@@ -159,6 +184,18 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 {
                     _logger.LogError("Failed to obtain access token from service account");
                     throw new InvalidOperationException("Failed to obtain access token from service account");
+                }
+
+                // Cache the token (valid for 1 hour, refresh at 50 minutes)
+                await _tokenLock.WaitAsync();
+                try
+                {
+                    _cachedAccessToken = token;
+                    _tokenExpiration = DateTime.UtcNow.AddMinutes(50);
+                }
+                finally
+                {
+                    _tokenLock.Release();
                 }
 
                 _logger.LogInformation("✅ Successfully obtained Google Cloud access token from service account");
@@ -283,7 +320,7 @@ Now extract keywords from the QUERY above. Return ONLY the JSON array:";
             // Results are already deduplicated at this point, so we can use them directly
             var uniqueRecords = results
                 .OrderByDescending(r => r.RelevanceScore)
-                .Take(20) 
+                .Take(10) 
                 .ToList();
 
             _logger.LogInformation("Synthesizing answer from {UniqueCount} unique records", uniqueRecords.Count);
@@ -311,7 +348,7 @@ Now extract keywords from the QUERY above. Return ONLY the JSON array:";
                 }
 
                 // Add important metadata fields
-                foreach (var meta in result.Metadata.Where(m => m.Key.StartsWith("meta_")).Take(10))
+                foreach (var meta in result.Metadata.Where(m => m.Key.StartsWith("meta_")).Take(5))
                 {
                     var fieldName = meta.Key.Replace("meta_", "").Replace("_", " ");
                     contextBuilder.AppendLine($"{fieldName}: {meta.Value}");
@@ -355,7 +392,7 @@ Now extract keywords from the QUERY above. Return ONLY the JSON array:";
             contextBuilder.AppendLine("ANSWER (Be compact, contextual, and point-to-point):");
 
             var prompt = contextBuilder.ToString();
-            return await CallGeminiModelAsync(prompt);
+            return await CallGeminiModelAsync(prompt, maxOutputTokens: 2000);
         }
 
         /// <summary>
