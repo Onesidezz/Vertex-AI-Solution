@@ -1,5 +1,6 @@
 using DocumentProcessingAPI.Core.DTOs;
 using DocumentProcessingAPI.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DocumentProcessingAPI.API.Controllers.MVC;
@@ -171,9 +172,11 @@ public class HomeController : Controller
     }
 
     /// <summary>
-    /// Error page
+    /// Error page - Allow anonymous access to prevent authentication loops
     /// </summary>
+    [AllowAnonymous]
     [HttpGet("/Error")]
+    [HttpGet("/Home/Error")]
     public IActionResult Error()
     {
         return View();

@@ -1,6 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 using DocumentProcessingAPI.Infrastructure.Services;
+using DocumentProcessingAPI.Core.DTOs;
+using DocumentProcessingAPI.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using TRIM.SDK;
 
 namespace DocumentProcessingAPI.API.Controllers;
 
@@ -14,12 +18,21 @@ public class TestController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly ILogger<TestController> _logger;
     private readonly PgVectorService _pgVectorService;
+    private readonly ContentManagerServices _contentManagerServices;
+    private readonly DocumentProcessingDbContext _context;
 
-    public TestController(IConfiguration configuration, ILogger<TestController> logger, PgVectorService pgVectorService)
+    public TestController(
+        IConfiguration configuration,
+        ILogger<TestController> logger,
+        PgVectorService pgVectorService,
+        ContentManagerServices contentManagerServices,
+        DocumentProcessingDbContext context)
     {
         _configuration = configuration;
         _logger = logger;
         _pgVectorService = pgVectorService;
+        _contentManagerServices = contentManagerServices;
+        _context = context;
     }
 
     /// <summary>
@@ -292,6 +305,220 @@ public class TestController : ControllerBase
                 success = false,
                 error = "Failed to save dummy embeddings",
                 message = ex.Message,
+                stackTrace = ex.StackTrace
+            });
+        }
+    }
+
+    /// <summary>
+    /// Backfill SourceDateModified field by fetching DateModified from Content Manager
+    /// POST /api/test/backfill-source-date-modified
+    /// </summary>
+    [HttpPost("backfill-source-date-modified")]
+    public async Task<IActionResult> BackfillSourceDateModified()
+    {
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            _logger.LogInformation("════════════════════════════════════════");
+            _logger.LogInformation("🔄 Starting SourceDateModified Backfill");
+            _logger.LogInformation("════════════════════════════════════════");
+
+            // Get all distinct RecordUris that need updating
+            var recordUrisToUpdate = await _context.Embeddings
+                .Where(e => e.SourceDateModified == null)
+                .Select(e => e.RecordUri)
+                .Distinct()
+                .ToListAsync();
+
+            _logger.LogInformation("📊 Found {Count} unique records to backfill", recordUrisToUpdate.Count);
+
+            if (recordUrisToUpdate.Count == 0)
+            {
+                return Ok(new
+                {
+                    success = true,
+                    message = "✅ No records need backfilling - all records already have SourceDateModified",
+                    recordsProcessed = 0,
+                    embeddingsUpdated = 0,
+                    duration = "0s"
+                });
+            }
+
+            // Get TRIM settings from configuration
+            var dataSetId = _configuration["TRIM:DataSetId"];
+            var workgroupServerUrl = _configuration["TRIM:WorkgroupServerUrl"];
+
+            if (string.IsNullOrEmpty(dataSetId) || string.IsNullOrEmpty(workgroupServerUrl))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    error = "TRIM settings not found in configuration",
+                    message = "Please configure TRIM:DataSetId and TRIM:WorkgroupServerUrl in appsettings.json"
+                });
+            }
+
+            _logger.LogInformation("🔌 Connecting to Content Manager...");
+            _logger.LogInformation("  • DataSetId: {DataSetId}", dataSetId);
+            _logger.LogInformation("  • WorkgroupServerURL: {Url}", workgroupServerUrl);
+
+            // Create a NEW database connection (same as ContentManagerServices)
+            var database = new TRIM.SDK.Database()
+            {
+                Id = dataSetId,
+                WorkgroupServerURL = workgroupServerUrl
+            };
+
+            database.Connect();
+
+            if (!database.IsConnected)
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    error = "Failed to connect to Content Manager"
+                });
+            }
+
+            var connectedUser = database.CurrentUser?.Name ?? "Unknown";
+            _logger.LogInformation("✅ Connected to Content Manager as: {User}", connectedUser);
+
+            // PHASE 1: Fetch DateModified from Content Manager (synchronous, no async!)
+            _logger.LogInformation("📥 Phase 1: Fetching DateModified from Content Manager...");
+            var recordTimestamps = new Dictionary<long, DateTime>();
+            var failedRecords = new List<(long uri, string error)>();
+            int fetchedCount = 0;
+            int fetchFailedCount = 0;
+
+            try
+            {
+                foreach (var recordUri in recordUrisToUpdate)
+                {
+                    try
+                    {
+                        // Fetch record from Content Manager (synchronous!)
+                        var record = new Record(database, recordUri);
+
+                        // Get DateModified (synchronous!)
+                        var dateModified = record.DateModified.ToDateTime();
+                        var dateModifiedUtc = DateTime.SpecifyKind(dateModified, DateTimeKind.Utc);
+
+                        // Store in memory
+                        recordTimestamps[recordUri] = dateModifiedUtc;
+                        fetchedCount++;
+
+                        // Log progress every 50 records
+                        if (fetchedCount % 50 == 0)
+                        {
+                            _logger.LogInformation("  ⏳ Fetched: {Fetched}/{Total} records",
+                                fetchedCount, recordUrisToUpdate.Count);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        fetchFailedCount++;
+                        failedRecords.Add((recordUri, ex.Message));
+                        _logger.LogWarning(ex, "  ⚠️ Failed to fetch record URI {Uri}", recordUri);
+                    }
+                }
+            }
+            finally
+            {
+                // Dispose the database connection BEFORE async operations
+                database.Dispose();
+                _logger.LogInformation("🔌 Disconnected from Content Manager");
+            }
+
+            _logger.LogInformation("✅ Phase 1 Complete: Fetched {Success} records, {Failed} failed",
+                fetchedCount, fetchFailedCount);
+
+            // PHASE 2: Update PostgreSQL (async operations are safe now!)
+            _logger.LogInformation("📤 Phase 2: Updating PostgreSQL...");
+            int recordsProcessed = 0;
+            int embeddingsUpdated = 0;
+
+            foreach (var kvp in recordTimestamps)
+            {
+                try
+                {
+                    var recordUri = kvp.Key;
+                    var dateModifiedUtc = kvp.Value;
+
+                    // Update all embeddings for this RecordUri in PostgreSQL
+                    var affectedRows = await _context.Embeddings
+                        .Where(e => e.RecordUri == recordUri)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(e => e.SourceDateModified, dateModifiedUtc));
+
+                    embeddingsUpdated += affectedRows;
+                    recordsProcessed++;
+
+                    // Log progress every 50 records
+                    if (recordsProcessed % 50 == 0)
+                    {
+                        _logger.LogInformation("  ⏳ Updated: {Processed}/{Total} records, {Embeddings} embeddings",
+                            recordsProcessed, recordTimestamps.Count, embeddingsUpdated);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "  ⚠️ Failed to update PostgreSQL for record URI {Uri}", kvp.Key);
+                }
+            }
+
+            _logger.LogInformation("✅ Phase 2 Complete: Updated {Success} records, {Embeddings} embeddings",
+                recordsProcessed, embeddingsUpdated);
+
+            var duration = DateTime.UtcNow - startTime;
+
+            _logger.LogInformation("════════════════════════════════════════");
+            _logger.LogInformation("✅ Backfill Complete");
+            _logger.LogInformation("════════════════════════════════════════");
+            _logger.LogInformation("📊 Statistics:");
+            _logger.LogInformation("  • Records Found: {Found}", recordUrisToUpdate.Count);
+            _logger.LogInformation("  • Records Fetched from CM: {Fetched}", fetchedCount);
+            _logger.LogInformation("  • Records Updated in PostgreSQL: {Updated}", recordsProcessed);
+            _logger.LogInformation("  • Embeddings Updated: {Embeddings}", embeddingsUpdated);
+            _logger.LogInformation("  • Records Failed: {Failed}", fetchFailedCount);
+            _logger.LogInformation("  • Duration: {Duration:mm\\:ss}", duration);
+
+            return Ok(new
+            {
+                success = true,
+                message = "✅ Backfill completed successfully",
+                statistics = new
+                {
+                    totalRecordsFound = recordUrisToUpdate.Count,
+                    recordsFetchedFromCM = fetchedCount,
+                    recordsUpdatedInPostgreSQL = recordsProcessed,
+                    embeddingsUpdated,
+                    recordsFailed = fetchFailedCount,
+                    successRate = recordUrisToUpdate.Count > 0
+                        ? $"{fetchedCount * 100.0 / recordUrisToUpdate.Count:F2}%"
+                        : "N/A"
+                },
+                duration = $"{duration.TotalSeconds:F2}s",
+                failedRecords = failedRecords.Take(10).Select(f => new
+                {
+                    uri = f.uri,
+                    error = f.error
+                }).ToList(),
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            var duration = DateTime.UtcNow - startTime;
+            _logger.LogError(ex, "❌ Backfill failed after {Duration:mm\\:ss}", duration);
+
+            return StatusCode(500, new
+            {
+                success = false,
+                error = "Backfill operation failed",
+                message = ex.Message,
+                duration = $"{duration.TotalSeconds:F2}s",
                 stackTrace = ex.StackTrace
             });
         }

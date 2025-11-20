@@ -108,9 +108,10 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 _logger.LogInformation("📊 Total pages: {TotalPages}", firstPage.TotalPages);
                 _logger.LogInformation("");
 
-                // Get existing RecordUri values for filtering (once)
+                // Get existing RecordUri values and their modification timestamps (once)
                 _logger.LogInformation("🔍 Checking PostgreSQL for existing records...");
                 var existingRecordUris = await _pgVectorService.GetAllExistingRecordUrisAsync();
+                var existingTimestamps = await _pgVectorService.GetRecordModificationTimestampsAsync();
                 _logger.LogInformation("✅ Found {Count} existing records in PostgreSQL", existingRecordUris.Count);
 
                 // Process pages
@@ -129,16 +130,60 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                         PAGE_SIZE,
                         checkpoint.LastSyncDate);
 
-                    // Filter out existing records
-                    var recordsToProcess = pagedResult.Items
+                    // Smart change detection: Compare modification timestamps
+                    var recordsToUpdate = new List<long>();
+                    var recordsToSkip = new List<long>();
+
+                    foreach (var record in pagedResult.Items.Where(r => existingRecordUris.Contains(r.URI)))
+                    {
+                        // Parse Content Manager's DateModified
+                        if (DateTime.TryParse(record.DateModified, out var cmDateModified) &&
+                            existingTimestamps.TryGetValue(record.URI, out var storedDateModified))
+                        {
+                            // Only reprocess if Content Manager's timestamp is NEWER than stored timestamp
+                            if (storedDateModified == null || cmDateModified > storedDateModified.Value)
+                            {
+                                recordsToUpdate.Add(record.URI);
+                                _logger.LogDebug("  ↻ Record {Uri} needs update: CM={CmDate} > Stored={StoredDate}",
+                                    record.URI, cmDateModified.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    storedDateModified?.ToString("yyyy-MM-dd HH:mm:ss") ?? "null");
+                            }
+                            else
+                            {
+                                // Timestamps match - skip reprocessing
+                                recordsToSkip.Add(record.URI);
+                            }
+                        }
+                        else
+                        {
+                            // If we can't compare timestamps, reprocess to be safe
+                            recordsToUpdate.Add(record.URI);
+                        }
+                    }
+
+                    // Identify new records (don't exist in PostgreSQL)
+                    var newRecords = pagedResult.Items
                         .Where(r => !existingRecordUris.Contains(r.URI))
                         .ToList();
 
-                    var skippedCount = pagedResult.Items.Count - recordsToProcess.Count;
+                    // Process NEW records + ACTUALLY UPDATED records (not those with matching timestamps)
+                    var recordsToProcess = pagedResult.Items
+                        .Where(r => !recordsToSkip.Contains(r.URI))
+                        .ToList();
+
                     _logger.LogInformation("📊 Page Statistics:");
                     _logger.LogInformation("  • Records in page: {PageCount}", pagedResult.Items.Count);
-                    _logger.LogInformation("  • Already embedded (skipped): {Skipped}", skippedCount);
-                    _logger.LogInformation("  • New records to process: {New}", recordsToProcess.Count);
+                    _logger.LogInformation("  • New records to process: {New}", newRecords.Count);
+                    _logger.LogInformation("  • Updated records (CM timestamp newer): {Update}", recordsToUpdate.Count);
+                    _logger.LogInformation("  • Skipped (already current): {Skipped}", recordsToSkip.Count);
+
+                    // Delete old embeddings for records that ACTUALLY changed
+                    if (recordsToUpdate.Any())
+                    {
+                        _logger.LogInformation("🗑️ Deleting old embeddings for {Count} truly updated records...", recordsToUpdate.Count);
+                        var deletedCount = await _pgVectorService.DeleteEmbeddingsByRecordUrisAsync(recordsToUpdate);
+                        _logger.LogInformation("✅ Deleted {Count} old embeddings", deletedCount);
+                    }
 
                     if (!recordsToProcess.Any())
                     {
@@ -548,6 +593,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 ["record_uri"] = record.URI,
                 ["record_title"] = record.Title ?? "",
                 ["date_created"] = record.DateCreated ?? "",
+                ["source_date_modified"] = record.DateModified ?? "",
                 ["record_type"] = record.IsContainer ?? "",
                 ["container"] = record.Container ?? "",
                 ["assignee"] = record.Assignee ?? "",

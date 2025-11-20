@@ -1699,7 +1699,11 @@
                                 </td>
                                 <td>
                                     <div class="col-name-wrapper">
-                                        <a href="/Download/@result.RecordUri" class="record-name-link" title="@result.RecordTitle">
+                                        <a href="/api/ContentManager/view/@result.RecordUri"
+                                           class="record-name-link record-view-link"
+                                           data-uri="@result.RecordUri"
+                                           data-title="@result.RecordTitle"
+                                           title="@result.RecordTitle">
                                             @result.RecordTitle
                                         </a>
                                     </div>
@@ -2021,6 +2025,175 @@
 
         function escapeRegex(string) {
             return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Handle record title click - detect Office files and provide desktop app option
+        $(document).on('click', '.record-view-link', function(e) {
+            e.preventDefault();
+
+            const title = $(this).data('title') || '';
+            const uri = $(this).data('uri');
+            const url = $(this).attr('href');
+
+            // Get file extension
+            const extension = title.toLowerCase().match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/);
+
+            if (extension) {
+                // This is an Office file - show options
+                showOfficeFileOptions(url, uri, title, extension[1]);
+            } else {
+                // Not an Office file - open normally in new tab
+                window.open(url, '_blank');
+            }
+        });
+
+        // Show options for Office files
+        function showOfficeFileOptions(url, uri, title, extension) {
+            const appName = {
+                'doc': 'Word',
+                'docx': 'Word',
+                'xls': 'Excel',
+                'xlsx': 'Excel',
+                'ppt': 'PowerPoint',
+                'pptx': 'PowerPoint'
+            }[extension] || 'Office';
+
+            const message = `How do you want to open "${title}"?\n\n` +
+                          `OK = Open in ${appName} Desktop App (Recommended)\n` +
+                          `Cancel = Just Download the file`;
+
+            if (confirm(message)) {
+                // Try to open in desktop app using Office URI scheme
+                openInOfficeApp(uri, extension, title);
+            } else {
+                // Just download the file
+                downloadOfficeFile(uri, title);
+            }
+        }
+
+        // Open file in Office desktop application using URI scheme
+        function openInOfficeApp(uri, extension, title) {
+            const appName = {
+                'doc': 'Word',
+                'docx': 'Word',
+                'xls': 'Excel',
+                'xlsx': 'Excel',
+                'ppt': 'PowerPoint',
+                'pptx': 'PowerPoint'
+            }[extension] || 'Office';
+
+            // Build the file URL - use the download endpoint with proper content type
+            const fileUrl = `${window.location.origin}/api/ContentManager/download/${uri}?inline=true`;
+
+            // MS Office URI schemes
+            const schemes = {
+                'doc': 'ms-word:ofe|u|',
+                'docx': 'ms-word:ofe|u|',
+                'xls': 'ms-excel:ofe|u|',
+                'xlsx': 'ms-excel:ofe|u|',
+                'ppt': 'ms-powerpoint:ofe|u|',
+                'pptx': 'ms-powerpoint:ofe|u|'
+            };
+
+            const scheme = schemes[extension];
+            if (!scheme) {
+                alert('Unsupported file type');
+                return;
+            }
+
+            // Construct the Office URI
+            const officeUri = scheme + fileUrl;
+
+            console.log('Attempting to open with URI:', officeUri);
+
+            // Try Method 1: Direct window.location
+            try {
+                window.location.href = officeUri;
+
+                // Show user message
+                setTimeout(() => {
+                    alert(`Opening in ${appName}...\n\n` +
+                          `If ${appName} doesn't open:\n` +
+                          `1. Make sure Microsoft Office is installed\n` +
+                          `2. Check if your browser blocked the action\n` +
+                          `3. You may need to allow the protocol in your browser\n\n` +
+                          `If it still doesn't work, click Cancel next time to download the file instead.`);
+                }, 1000);
+            } catch (error) {
+                console.error('Error opening in Office app:', error);
+
+                // Fallback: Download the file
+                if (confirm(`Could not open in ${appName}.\n\nWould you like to download the file instead?`)) {
+                    downloadOfficeFile(uri, title);
+                }
+            }
+        }
+
+        // Download Office file
+        async function downloadOfficeFile(uri, title) {
+            try {
+                // Download the file using fetch
+                const downloadUrl = `/api/ContentManager/download/${uri}`;
+                const response = await fetch(downloadUrl);
+
+                if (!response.ok) {
+                    throw new Error('Download failed');
+                }
+
+                // Get the blob
+                const blob = await response.blob();
+
+                // Get filename from Content-Disposition header or use title
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = title;
+
+                if (contentDisposition) {
+                    const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                    if (filenameMatch && filenameMatch[1]) {
+                        filename = filenameMatch[1].replace(/['"]/g, '');
+                    }
+                }
+
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+
+                // Trigger download
+                a.click();
+
+                // Cleanup
+                setTimeout(() => {
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                }, 100);
+
+                // Show success message
+                setTimeout(() => {
+                    alert(`✅ Download started!\n\n` +
+                          `File: "${filename}"\n\n` +
+                          `Check your Downloads folder and double-click the file to open it in the appropriate application.`);
+                }, 500);
+
+            } catch (error) {
+                console.error('Error downloading file:', error);
+                alert(`❌ Error downloading file. Please try again.`);
+            }
+        }
+
+        // Download file function
+        function downloadFile(uri, title) {
+            const downloadUrl = `/api/ContentManager/download/${uri}`;
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = title;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         // ACL Permissions functionality

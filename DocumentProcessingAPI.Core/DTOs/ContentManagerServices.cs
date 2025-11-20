@@ -221,6 +221,9 @@ namespace DocumentProcessingAPI.Core.DTOs
                     // Use ToDateTime() to convert TrimDateTime to standard DateTime, then format with time
                     var dateCreatedStr = record.DateCreated.ToDateTime().ToString("MM/dd/yyyy HH:mm:ss");
 
+                    // Capture DateModified for change detection
+                    var dateModifiedStr = record.DateModified.ToDateTime().ToString("MM/dd/yyyy HH:mm:ss");
+
                     var viewModel = new RecordViewModel
                     {
                         URI = record.Uri.Value,
@@ -229,6 +232,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                         AllParts = record.AllParts ?? "",
                         Assignee = record.Assignee?.Name ?? "",
                         DateCreated = dateCreatedStr,
+                        DateModified = dateModifiedStr,
                         IsContainer = isContainer ? "Container" : "Document File",
                         ContainerCount = isContainer ? new Dictionary<string, long>() : null,
                         ACL = record.AccessControlList?.ToString() ?? "",
@@ -291,7 +295,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                 {
                     // Add DateModified filter for incremental sync
                     // TRIM uses modifiedOn for last modified date
-                    var dateFilter = $"editedOn>={lastSyncDate.Value:MM/dd/yyyy}";
+                    var dateFilter = $"updated>={lastSyncDate.Value:MM/dd/yyyy}";
 
                     if (string.IsNullOrWhiteSpace(searchString) || searchString == "*")
                     {
@@ -400,6 +404,9 @@ namespace DocumentProcessingAPI.Core.DTOs
                     // Format DateCreated with both date AND time
                     var dateCreatedStr = record.DateCreated.ToDateTime().ToString("MM/dd/yyyy HH:mm:ss");
 
+                    // Capture DateModified for change detection
+                    var dateModifiedStr = record.DateModified.ToDateTime().ToString("MM/dd/yyyy HH:mm:ss");
+
                     var viewModel = new RecordViewModel
                     {
                         URI = record.Uri.Value,
@@ -408,6 +415,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                         AllParts = record.AllParts ?? "",
                         Assignee = record.Assignee?.Name ?? "",
                         DateCreated = dateCreatedStr,
+                        DateModified = dateModifiedStr,
                         IsContainer = isContainer ? "Container" : "Document File",
                         ContainerCount = isContainer ? new Dictionary<string, long>() : null,
                         ACL = record.AccessControlList?.ToString() ?? "",

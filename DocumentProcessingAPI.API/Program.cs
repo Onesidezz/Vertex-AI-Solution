@@ -6,6 +6,7 @@ using DocumentProcessingAPI.Core.Interfaces;
 using DocumentProcessingAPI.Infrastructure.Auth;
 using DocumentProcessingAPI.Infrastructure.Data;
 using DocumentProcessingAPI.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.EntityFrameworkCore;
 using Quartz;
@@ -15,11 +16,9 @@ using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure Serilog
+// Configure Serilog - reads Console and File config from appsettings.json
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
-    .WriteTo.Console()
-    .WriteTo.File("logs/documentprocessing-.txt", rollingInterval: RollingInterval.Day)
     .WriteTo.Logger(lc => lc
         .Filter.ByIncludingOnly(evt => evt.Level == Serilog.Events.LogEventLevel.Error
             && evt.Properties.ContainsKey("FailedRecord"))
@@ -44,24 +43,52 @@ var enableWindowsAuth = builder.Configuration.GetValue<bool>("Authentication:Ena
 
 if (enableWindowsAuth)
 {
-    builder.Services.AddAuthentication(NegotiateDefaults.AuthenticationScheme)
-        .AddNegotiate(options =>
+    // Use Cookie authentication with Windows auth to handle Windows Hello properly
+    builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme)
+        .AddCookie(Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme, options =>
         {
+            options.Cookie.Name = "DocumentProcessing.Auth";
+            options.Cookie.HttpOnly = true;
+            options.Cookie.SecurePolicy = Microsoft.AspNetCore.Http.CookieSecurePolicy.Always;
+            options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax;
+            options.ExpireTimeSpan = TimeSpan.FromHours(8); // 8 hour session
+            options.SlidingExpiration = true;
+            options.LoginPath = "/Login"; // Will use Windows auth here
+            options.AccessDeniedPath = "/AccessDenied";
+        })
+        .AddNegotiate(NegotiateDefaults.AuthenticationScheme, options =>
+        {
+            // Enable persistent authentication to handle Windows Hello better
+            options.PersistKerberosCredentials = true;
+            options.PersistNtlmCredentials = true;
+
             // Log authentication events
             options.Events = new Microsoft.AspNetCore.Authentication.Negotiate.NegotiateEvents
             {
-                OnAuthenticated = context =>
+                OnAuthenticated = async context =>
                 {
                     var username = context.Principal?.Identity?.Name ?? "Unknown";
                     var authType = context.Principal?.Identity?.AuthenticationType ?? "Unknown";
                     Log.Information("✅ [AUTH SUCCESS] User authenticated: {Username} using {AuthType}",
                         username, authType);
-                    return Task.CompletedTask;
+
+                    // Sign in with cookie authentication to persist the Windows auth
+                    // This prevents re-authentication on every request and handles Windows Hello better
+                    if (context.Principal != null)
+                    {
+                        await context.HttpContext.SignInAsync(
+                            Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme,
+                            context.Principal);
+
+                        Log.Information("🍪 [COOKIE CREATED] Authentication cookie created for {Username}", username);
+                    }
                 },
                 OnAuthenticationFailed = context =>
                 {
+                    // Log authentication failures
+                    var errorMessage = context.Exception?.Message ?? "Unknown error";
                     Log.Error("❌ [AUTH FAILED] Authentication failed for {Path}: {Error}",
-                        context.Request.Path, context.Exception?.Message ?? "Unknown error");
+                        context.Request.Path, errorMessage);
                     return Task.CompletedTask;
                 },
                 OnChallenge = context =>
@@ -78,10 +105,13 @@ if (enableWindowsAuth)
 
     builder.Services.AddAuthorization(options =>
     {
-        // Require authenticated users for ALL endpoints by default
+        // Require authenticated users for ALL endpoints by default, except error pages
         options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
+
+        // Allow anonymous access to error pages to prevent auth loops
+        options.AddPolicy("AllowAnonymous", policy => policy.RequireAssertion(_ => true));
     });
 
     Log.Information("✅ Windows Authentication enabled - All endpoints require authentication");
@@ -260,8 +290,6 @@ app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
     {
-        context.Response.ContentType = "application/json";
-
         var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
         var exception = exceptionHandlerPathFeature?.Error;
 
@@ -270,6 +298,7 @@ app.UseExceptionHandler(errorApp =>
         if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
         {
             // Return JSON error for API requests
+            context.Response.ContentType = "application/json";
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
 
             var problemDetails = new
@@ -293,7 +322,7 @@ app.UseExceptionHandler(errorApp =>
 
 app.UseHttpsRedirection();
 
-// Static files for MVC (CSS, JS, images)
+// Static files for MVC (CSS, JS, images) - BEFORE authentication to allow anonymous access
 app.UseStaticFiles();
 
 app.UseCors();
@@ -304,6 +333,7 @@ app.UseIpRateLimiting();
 app.UseRouting();
 
 // Authentication must come before Authorization
+// Static files are served before this, so they don't require auth
 app.UseAuthentication();
 app.UseAuthorization();
 

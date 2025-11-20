@@ -48,6 +48,12 @@ public class Embedding
     public DateTime? DateCreated { get; set; }
 
     /// <summary>
+    /// Date when the record was last modified in Content Manager
+    /// Used for smart change detection - only reprocess if source modified after last embedding
+    /// </summary>
+    public DateTime? SourceDateModified { get; set; }
+
+    /// <summary>
     /// Record type: "Container" or "Document"
     /// </summary>
     public string RecordType { get; set; } = string.Empty;

@@ -8,6 +8,7 @@ namespace DocumentProcessingAPI.Core.DTOs
         public string AllParts { get; set; }
         public string Assignee { get; set; }
         public string DateCreated { get; set; }
+        public string DateModified { get; set; } // Last modified timestamp from Content Manager
         public string IsContainer { get; set; }
         public Dictionary<string, long> ContainerCount { get; set; }
         public string ACL { get; set; }

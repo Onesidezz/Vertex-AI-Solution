@@ -173,6 +173,7 @@ public class PgVectorService
                     RecordUri = GetMetadataValue<long>(v.Metadata, "record_uri"),
                     RecordTitle = GetMetadataValue<string>(v.Metadata, "record_title", ""),
                     DateCreated = ParseDateTimeUtc(GetMetadataValue<string>(v.Metadata, "date_created", null)),
+                    SourceDateModified = ParseDateTimeUtc(GetMetadataValue<string>(v.Metadata, "source_date_modified", null)),
                     RecordType = GetMetadataValue<string>(v.Metadata, "record_type", ""),
                     Container = GetMetadataValue<string>(v.Metadata, "container", null),
                     Assignee = GetMetadataValue<string>(v.Metadata, "assignee", null),
@@ -357,6 +358,36 @@ public class PgVectorService
     }
 
     /// <summary>
+    /// Delete all embeddings for multiple Content Manager record URIs (batch deletion)
+    /// Used for efficient cleanup when reprocessing updated records
+    /// </summary>
+    public async Task<int> DeleteEmbeddingsByRecordUrisAsync(List<long> recordUris)
+    {
+        if (recordUris == null || !recordUris.Any())
+        {
+            _logger.LogWarning("⚠️ Empty record URI list provided for deletion");
+            return 0;
+        }
+
+        try
+        {
+            _logger.LogInformation("🗑️ Deleting embeddings for {Count} record URIs (batch deletion)", recordUris.Count);
+
+            var deleted = await _context.Embeddings
+                .Where(e => recordUris.Contains(e.RecordUri))
+                .ExecuteDeleteAsync();
+
+            _logger.LogInformation("✅ Successfully deleted {Count} embeddings for {RecordCount} records", deleted, recordUris.Count);
+            return deleted;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to delete embeddings for {Count} record URIs", recordUris.Count);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Get all point IDs for a specific record URI
     /// Used for deletion tracking
     /// </summary>
@@ -399,6 +430,30 @@ public class PgVectorService
         {
             _logger.LogError(ex, "❌ Failed to get existing RecordUri values from PostgreSQL");
             return new HashSet<long>();
+        }
+    }
+
+    /// <summary>
+    /// Get modification timestamps for existing records
+    /// Returns Dictionary: RecordUri -> SourceDateModified
+    /// Used for smart change detection - only reprocess if source was modified after last embedding
+    /// </summary>
+    public async Task<Dictionary<long, DateTime?>> GetRecordModificationTimestampsAsync()
+    {
+        try
+        {
+            var timestamps = await _context.Embeddings
+                .GroupBy(e => e.RecordUri)
+                .Select(g => new { RecordUri = g.Key, SourceDateModified = g.Max(e => e.SourceDateModified) })
+                .ToDictionaryAsync(x => x.RecordUri, x => x.SourceDateModified);
+
+            _logger.LogInformation("📊 Retrieved modification timestamps for {Count} records", timestamps.Count);
+            return timestamps;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to get record modification timestamps from PostgreSQL");
+            return new Dictionary<long, DateTime?>();
         }
     }
 
