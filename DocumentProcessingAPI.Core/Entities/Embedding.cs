@@ -21,7 +21,7 @@ public class Embedding
     public string EmbeddingId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Vector embedding (3072 dimensions for Gemini)
+    /// Vector embedding (1024 dimensions for Ollama bge-m3 model)
     /// Stored using pgvector type for efficient similarity search
     /// </summary>
     public Vector Vector { get; set; } = null!;

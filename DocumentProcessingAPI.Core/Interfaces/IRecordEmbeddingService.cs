@@ -12,6 +12,13 @@ namespace DocumentProcessingAPI.Core.Interfaces
         Task<int> ProcessAllRecordsAsync(string searchString = "*", CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Process a single record by URI (for testing/debugging)
+        /// </summary>
+        /// <param name="recordUri">The Content Manager record URI to process</param>
+        /// <returns>Number of chunks created</returns>
+        Task<int> ProcessSingleRecordAsync(long recordUri);
+
+        /// <summary>
         /// Delete all embeddings (chunks) for a specific record URI from Vector DB
         /// </summary>
         /// <param name="recordUri">The Content Manager record URI to delete</param>

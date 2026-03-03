@@ -22,6 +22,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         private readonly ContentManagerServices _contentManagerServices;
         private readonly IRecordSearchHelperServices _helperServices;
         private readonly IRecordSearchGoogleServices _googleServices;
+        private readonly IRerankerService _rerankerService;
 
         public RecordSearchService(
             IEmbeddingService embeddingService,
@@ -30,7 +31,8 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             IConfiguration configuration,
             ContentManagerServices contentManagerServices,
             IRecordSearchHelperServices helperServices,
-            IRecordSearchGoogleServices googleServices)
+            IRecordSearchGoogleServices googleServices,
+            IRerankerService rerankerService)
         {
             _embeddingService = embeddingService;
             _pgVectorService = pgVectorService;
@@ -39,6 +41,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             _contentManagerServices = contentManagerServices;
             _helperServices = helperServices;
             _googleServices = googleServices;
+            _rerankerService = rerankerService;
         }
 
 
@@ -303,23 +306,40 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                 _logger.LogInformation("After deduplication by record_uri: {Count} unique records", deduplicatedResults.Count);
 
-                // Apply sorting based on query intent
-                if (isEarliest || isLatest)
+                // Default sort by relevance score before reranking.
+                // Date sorting runs AFTER reranking to preserve intent.
+                if (!isEarliest && !isLatest)
                 {
-                    deduplicatedResults = _helperServices.ApplyDateSorting(deduplicatedResults, isEarliest);
-                    _logger.LogInformation("Applied date sorting - earliest: {IsEarliest}", isEarliest);
-                }
-                else
-                {
-                    // Default: sort by relevance score
                     deduplicatedResults = deduplicatedResults.OrderByDescending(r => r.similarity).ToList();
                 }
 
-                // Take final results
-                var finalResults = deduplicatedResults.Take(topK).ToList();
-
                 step4Stopwatch.Stop();
                 _logger.LogInformation("   ⏱️ STEP 4 completed in {ElapsedMs}ms", step4Stopwatch.ElapsedMilliseconds);
+
+                // ============================================================
+                // STEP 4.5: RERANKING (Cross-encoder via Ollama /api/rerank)
+                // Re-scores top candidates using bge-reranker-v2-m3.
+                // Runs after deduplication + hybrid sort, before topK slice.
+                // Gracefully falls back to hybrid score order on any failure.
+                // ============================================================
+                var step45Stopwatch = Stopwatch.StartNew();
+                _logger.LogInformation("🔁 STEP 4.5: Reranking candidates");
+                _logger.LogInformation("   📊 Candidates available for reranking: {Count}", deduplicatedResults.Count);
+
+                deduplicatedResults = await _rerankerService.RerankAsync(cleanQuery, deduplicatedResults, topK);
+
+                step45Stopwatch.Stop();
+                _logger.LogInformation("   ⏱️ STEP 4.5 (Reranking) completed in {ElapsedMs}ms", step45Stopwatch.ElapsedMilliseconds);
+
+                // Apply date sorting AFTER reranking to preserve date-sort intent
+                if (isEarliest || isLatest)
+                {
+                    deduplicatedResults = _helperServices.ApplyDateSorting(deduplicatedResults, isEarliest);
+                    _logger.LogInformation("   Applied date sorting post-rerank - earliest: {IsEarliest}", isEarliest);
+                }
+
+                // Take final topK results (ordered by reranker score, then date if applicable)
+                var finalResults = deduplicatedResults.Take(topK).ToList();
 
                 // ============================================================
                 // STEP 5: APPLY ACL FILTERING
@@ -335,15 +355,22 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                     aclFilteredResults.Count, finalResults.Count);
 
                 // Convert to search result DTOs
-                var searchResults = aclFilteredResults.Select(result => new RecordSearchResultDto
+                var searchResults = aclFilteredResults.Select(result =>
                 {
-                    RecordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri"),
-                    RecordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "",
-                    DateCreated = _helperServices.GetMetadataValue<string>(result.metadata, "date_created") ?? "",
-                    RecordType = _helperServices.GetMetadataValue<string>(result.metadata, "record_type") ?? "",
-                    RelevanceScore = result.similarity,
-                    Metadata = result.metadata,
-                    ContentPreview = _helperServices.GetMetadataValue<string>(result.metadata, "chunk_content") ?? _helperServices.BuildContentPreview(result.metadata)
+                    // Get full content and create a proper preview (max 500 chars for AI synthesis)
+                    var fullContent = _helperServices.GetMetadataValue<string>(result.metadata, "chunk_content") ?? "";
+                 
+
+                    return new RecordSearchResultDto
+                    {
+                        RecordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri"),
+                        RecordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "",
+                        DateCreated = _helperServices.GetMetadataValue<string>(result.metadata, "date_created") ?? "",
+                        RecordType = _helperServices.GetMetadataValue<string>(result.metadata, "record_type") ?? "",
+                        RelevanceScore = result.similarity,
+                        Metadata = result.metadata,
+                        ContentPreview = fullContent
+                    };
                 }).ToList();
 
                 // Generate AI synthesis of results

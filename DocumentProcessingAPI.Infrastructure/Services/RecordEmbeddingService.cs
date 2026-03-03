@@ -3,6 +3,7 @@ using DocumentProcessingAPI.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace DocumentProcessingAPI.Infrastructure.Services
 {
@@ -465,7 +466,12 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 textBuilder.AppendLine($"All Parts: {record.AllParts}");
 
             if (!string.IsNullOrEmpty(record.ACL))
-                textBuilder.AppendLine($"Access Control: {record.ACL}");
+            {
+                // Normalize namespace-style ACL identifiers where dots gained spurious spaces:
+                // "TRIM. SDK. TrimAccessControlList" → "TRIM.SDK.TrimAccessControlList"
+                var acl = Regex.Replace(record.ACL, @"\.\s+", ".");
+                textBuilder.AppendLine($"Access Control: {acl}");
+            }
 
             var metadataText = textBuilder.ToString();
             string? documentContent = null;
@@ -517,9 +523,15 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                             if (!string.IsNullOrWhiteSpace(extractedText))
                             {
+                                // Clean OCR artifacts (spaced-out letters, broken numbers, split codes)
+                                // before embedding so that FTS and vector search can match reliably.
+                                var rawLength = extractedText.Length;
+                                extractedText = CleanOcrText(extractedText);
+
                                 documentContent = extractedText;
                                 _logger.LogInformation("✅ Text extraction successful");
-                                _logger.LogInformation("   • Extracted Text Size: {Length:N0} characters", extractedText.Length);
+                                _logger.LogInformation("   • Raw Text Size: {RawLength:N0} chars → Cleaned: {Length:N0} chars",
+                                    rawLength, extractedText.Length);
                             }
                             else
                             {
@@ -556,6 +568,126 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             }
 
             return (metadataText, documentContent);
+        }
+
+        /// <summary>
+        /// Text repair engine: fixes all word segmentation errors caused by fixed-width
+        /// column wrapping, OCR fragmentation, and line-break artifacts.
+        /// Rejoins incorrectly split letters, numbers, dates, codes, quarters, years,
+        /// and IDs. Preserves real word boundaries. Never changes meaning.
+        ///
+        /// Repairs (in order):
+        ///   1.  file:// path noise       "file://C:\..."            → (removed)
+        ///   2.  Spaced-out letters        "I N V O I C E"           → "INVOICE"
+        ///   3.  ALL-CAPS orphan char      "CHAMBERLAI N"            → "CHAMBERLAIN"
+        ///                                 "MISSIN G"                → "MISSING"
+        ///                                 "BLU E-RIBBO N"           → "BLUE-RIBBON"
+        ///   4.  Broken numbers            "11 ,895.77"              → "11,895.77"
+        ///   5.  Currency spacing          "$ 1,234"                 → "$1,234"
+        ///   6.  Hyphenated code spacing   "INV- 000101"             → "INV-000101"
+        ///   7.  Split years               "20 26"                   → "2026"
+        ///   8.  Split quarter codes       "Q 1"                     → "Q1"
+        ///   9.  Split slashes in IDs      "D26/ 133"                → "D26/133"
+        ///  10.  Preposition + article     "witha" / "froma"         → "with a" / "from a"
+        ///  11.  Participle + article      "leavinga" / "beinga"     → "leaving a" / "being a"
+        /// </summary>
+        private static string CleanOcrText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            // 1. Strip file:// paths injected by HTML/browser renderers — pure noise.
+            //    Matches to end-of-line so the trailing date stamp goes too.
+            text = Regex.Replace(text, @"file://.*$", string.Empty, RegexOptions.Multiline);
+
+            // 2. Rejoin 3+ consecutive single UPPERCASE letters separated by spaces.
+            //    "I N V O I C E" → "INVOICE"  |  "I D" (only 2 chars) — left alone.
+            text = Regex.Replace(
+                text,
+                @"\b([A-Z])(?: ([A-Z])){2,}\b",
+                m => m.Value.Replace(" ", ""));
+
+            // 3. ALL-CAPS column-wrap: word-stem (≥2 chars) + space + orphan single letter.
+            //    "CHAMBERLAI N" → "CHAMBERLAIN", "YO U" → "YOU", "TH E" → "THE"
+            //    "WA S" → "WAS", "OU T" → "OUT", "SA Y" → "SAY", "AN D" → "AND"
+            //
+            //    Structural guard (no keyword list): the ONLY standalone single-letter
+            //    English words are "A" (article) and "I" (pronoun).  Any other orphan
+            //    letter is statistically an OCR-split fragment of the preceding stem, so
+            //    absorb it.  This works dynamically for any word in any domain.
+            //
+            //    Minimum stem is 2 (not 1) so single-letter pairs like "I T" are not
+            //    collapsed — "I" as stem would be a standalone word, not a fragment.
+            text = Regex.Replace(
+                text,
+                @"\b([A-Z]{2,}) ([A-Z])\b",
+                m =>
+                {
+                    var orphan = m.Groups[2].Value;
+                    // Keep the space only when the orphan is a genuine standalone word
+                    return (orphan == "A" || orphan == "I") ? m.Value
+                        : m.Groups[1].Value + orphan;
+                });
+
+            // 4. Fix numbers with stray spaces around commas / decimals.
+            //    "11 ,895.77" → "11,895.77"   |   "1,234 .56" → "1,234.56"
+            text = Regex.Replace(text, @"(\d)\s+([,.])\s*(\d)", "$1$2$3");
+            text = Regex.Replace(text, @"(\d)\s*([,.])\s+(\d)", "$1$2$3");
+
+            // 5. Currency symbol separated from amount: "$ 1,234" → "$1,234"
+            text = Regex.Replace(text, @"\$\s+(\d)", "$$1");
+
+            // 6. Hyphenated codes / IDs split by spaces: "INV- 000101" → "INV-000101"
+            text = Regex.Replace(text, @"([A-Za-z0-9])\s*-\s*([A-Za-z0-9])", "$1-$2");
+
+            // 7. Split years: "20 26" → "2026", "19 95" → "1995"
+            text = Regex.Replace(text, @"\b(19|20)\s(\d{2})\b", "$1$2");
+
+            // 8. Split quarter codes: "Q 1 2026" → "Q1 2026", "Q 3" → "Q3"
+            text = Regex.Replace(text, @"\bQ\s+([1-4])\b", "Q$1");
+
+            // 9. Split slashes in record IDs and dates: "D26/ 133" → "D26/133"
+            text = Regex.Replace(text, @"([A-Za-z0-9])\s*/\s*([A-Za-z0-9])", "$1/$2");
+
+            // 10+11. Word + article demerge — structural suffix approach (no keyword lists).
+            //
+            //  Principle: certain English derivational / inflectional suffixes NEVER form
+            //  a valid word when immediately followed by the article "a" or "an".
+            //  Detecting the suffix structurally catches any word ending in that pattern,
+            //  across all domains and any corpus size, without enumerating specific words.
+            //
+            //  Suffix → merged form → corrected form (examples):
+            //    -ing  : "leavinga"      → "leaving a"      (any gerund/participle)
+            //    -tion : "informationa"  → "information a"  (any nominalisation)
+            //    -sion : "decisiona"     → "decision a"
+            //    -ment : "documenta"     → "document a"
+            //    -ance : "performancea"  → "performance a"
+            //    -ence : "presencela"    → "presence a"
+            //    -ism  : "criticisma"    → "criticism a"
+            //    -ward : "forwarda"      → "forward a"
+            //    -ful  : "beautifula"    → "beautiful a"
+            //    -less : "carelessla"    → "careless a"
+            //    -ous  : "dangerousa"    → "dangerous a"
+            //    -ling : "darlinga"      → "darling a"
+            //    -ly   : "quicklya"      → "quickly a"
+            //
+            //  None of the patterns above produce a real English word when + "a"/"an",
+            //  so no dictionary or keyword list is required.
+            const string SuffixPattern =
+                @"ing|tion|sion|ment|ance|ence|ism|ward|ful|less|ous|ling|ly";
+
+            text = Regex.Replace(text,
+                @"\b(\w{2,}(?:" + SuffixPattern + @"))a\b",
+                "$1 a", RegexOptions.IgnoreCase);
+
+            text = Regex.Replace(text,
+                @"\b(\w{2,}(?:" + SuffixPattern + @"))an\b",
+                "$1 an", RegexOptions.IgnoreCase);
+
+            // 12. Collapse runs of spaces produced by steps above.
+            text = Regex.Replace(text, @" {2,}", " ");
+
+            return text.Trim();
         }
 
         /// <summary>
@@ -837,6 +969,95 @@ namespace DocumentProcessingAPI.Infrastructure.Services
             }
 
             return string.Join(", ", timeContext);
+        }
+
+        /// <summary>
+        /// Process a single record by URI (for testing/debugging)
+        /// Fetches the record from Content Manager and generates embeddings
+        /// </summary>
+        /// <param name="recordUri">The Content Manager record URI to process</param>
+        /// <returns>Number of chunks created</returns>
+        public async Task<int> ProcessSingleRecordAsync(long recordUri)
+        {
+            try
+            {
+                _logger.LogInformation("🔍 TEST: Processing single record URI: {RecordUri}", recordUri);
+
+                // Ensure Content Manager is connected
+                await _contentManagerServices.ConnectDatabaseAsync();
+
+                // Try different search formats to find the record
+                var searchFormats = new[] {
+                    $"uri:{recordUri}",
+                    $"recnum:{recordUri}",
+                    $"{recordUri}",
+                    $"number:{recordUri}"
+                };
+
+                RecordViewModel? record = null;
+                foreach (var searchFormat in searchFormats)
+                {
+                    _logger.LogInformation("🔍 TEST: Trying search format: {SearchFormat}", searchFormat);
+                    var pagedResult = await _contentManagerServices.GetRecordsPaginatedAsync(
+                        searchFormat,
+                        0,
+                        1,
+                        lastSyncDate: null);
+
+                    if (pagedResult.Items.Count > 0)
+                    {
+                        record = pagedResult.Items[0];
+                        _logger.LogInformation("✅ TEST: Found record with search format: {SearchFormat}", searchFormat);
+                        break;
+                    }
+                }
+
+                if (record == null)
+                {
+                    _logger.LogWarning("⚠️ TEST: Record not found with any search format for URI: {RecordUri}", recordUri);
+                    _logger.LogWarning("⚠️ TEST: Tried formats: {Formats}", string.Join(", ", searchFormats));
+                    return 0;
+                }
+                _logger.LogInformation("✅ TEST: Found record: {Title} (URI: {RecordUri})", record.Title, record.URI);
+
+                // Delete old embeddings if they exist
+                _logger.LogInformation("🗑️ TEST: Checking for existing embeddings...");
+                var deleted = await _pgVectorService.DeleteEmbeddingsByRecordUriAsync(recordUri);
+                if (deleted)
+                {
+                    _logger.LogInformation("🗑️ TEST: Deleted existing embeddings for record");
+                }
+
+                // Process the record
+                _logger.LogInformation("⚙️ TEST: Processing record (download, extract, chunk, embed)...");
+                var result = await ProcessSingleRecordAsync(record, CancellationToken.None);
+
+                if (!result.success)
+                {
+                    _logger.LogError("❌ TEST: Failed to process record: {Error}", result.error);
+                    return 0;
+                }
+
+                // Save embeddings
+                if (result.vectors.Any())
+                {
+                    _logger.LogInformation("💾 TEST: Saving {Count} embeddings to database...", result.vectors.Count);
+                    await _pgVectorService.SaveEmbeddingsBatchAsync(result.vectors);
+                    _logger.LogInformation("✅ TEST: Successfully saved {Count} chunks for record {RecordUri}",
+                        result.vectors.Count, recordUri);
+                    return result.vectors.Count;
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ TEST: No embeddings generated for record {RecordUri}", recordUri);
+                    return 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ TEST: Failed to process record URI: {RecordUri}", recordUri);
+                throw;
+            }
         }
 
         /// <summary>

@@ -13,7 +13,8 @@ namespace DocumentProcessingAPI.Core.Interfaces
         /// </summary>
         /// <param name="prompt">The prompt to send to the model</param>
         /// <param name="maxOutputTokens">Maximum tokens to generate (default: 512)</param>
-        Task<string> CallGeminiModelAsync(string prompt, int maxOutputTokens = 512);
+        /// <param name="numCtx">Total context window in tokens (default: 8192). Increase for longer documents.</param>
+        Task<string> CallGeminiModelAsync(string prompt, int maxOutputTokens = 512, int numCtx = 32768);
 
         /// <summary>
         /// Get Google Cloud access token using gcloud CLI

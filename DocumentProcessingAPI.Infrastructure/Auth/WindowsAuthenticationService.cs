@@ -53,8 +53,34 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     /// </summary>
     public string? GetCurrentUsername()
     {
-        var identity = GetCurrentWindowsIdentity();
-        return identity?.Name;
+        try
+        {
+            var httpContext = _httpContextAccessor.HttpContext;
+
+            // First try to get WindowsIdentity (direct Windows auth)
+            if (httpContext?.User?.Identity is WindowsIdentity windowsIdentity)
+            {
+                _logger.LogDebug("🔍 [AUTH SERVICE] Got username from WindowsIdentity: {Username}", windowsIdentity.Name);
+                return windowsIdentity.Name;
+            }
+
+            // Fallback: Get username from any authenticated identity (e.g., ClaimsIdentity from cookie)
+            if (httpContext?.User?.Identity != null && httpContext.User.Identity.IsAuthenticated)
+            {
+                var username = httpContext.User.Identity.Name;
+                _logger.LogDebug("🔍 [AUTH SERVICE] Got username from {IdentityType}: {Username}",
+                    httpContext.User.Identity.GetType().Name, username);
+                return username;
+            }
+
+            _logger.LogWarning("⚠️ [AUTH SERVICE] No authenticated user found");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ [AUTH SERVICE] Error getting username");
+            return null;
+        }
     }
 
     /// <summary>
@@ -62,21 +88,27 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     /// </summary>
     public string? GetCurrentUserDisplayName()
     {
+        var username = GetCurrentUsername();
+        if (string.IsNullOrEmpty(username))
+            return null;
+
         try
         {
-            var identity = GetCurrentWindowsIdentity();
-            if (identity == null)
-                return null;
-
+            // Try domain context first
             using var context = new PrincipalContext(ContextType.Domain);
-            using var user = UserPrincipal.FindByIdentity(context, identity.Name);
+            using var user = UserPrincipal.FindByIdentity(context, username);
 
-            return user?.DisplayName ?? identity.Name;
+            return user?.DisplayName ?? username;
+        }
+        catch (PrincipalServerDownException)
+        {
+            _logger.LogDebug("Domain server unavailable, using username as display name");
+            return username;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not retrieve display name from Active Directory, using identity name");
-            return GetCurrentUsername();
+            _logger.LogWarning(ex, "Could not retrieve display name from Active Directory, using username");
+            return username;
         }
     }
 
@@ -85,16 +117,21 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     /// </summary>
     public string? GetCurrentUserEmail()
     {
+        var username = GetCurrentUsername();
+        if (string.IsNullOrEmpty(username))
+            return null;
+
         try
         {
-            var identity = GetCurrentWindowsIdentity();
-            if (identity == null)
-                return null;
-
             using var context = new PrincipalContext(ContextType.Domain);
-            using var user = UserPrincipal.FindByIdentity(context, identity.Name);
+            using var user = UserPrincipal.FindByIdentity(context, username);
 
             return user?.EmailAddress;
+        }
+        catch (PrincipalServerDownException)
+        {
+            _logger.LogDebug("Domain server unavailable, email not available");
+            return null;
         }
         catch (Exception ex)
         {
@@ -110,12 +147,22 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     {
         try
         {
-            var identity = GetCurrentWindowsIdentity();
-            if (identity == null)
-                return false;
+            var httpContext = _httpContextAccessor.HttpContext;
 
-            var principal = new WindowsPrincipal(identity);
-            return principal.IsInRole(groupName);
+            // Try WindowsIdentity first (for direct Windows auth)
+            if (httpContext?.User?.Identity is WindowsIdentity windowsIdentity)
+            {
+                var principal = new WindowsPrincipal(windowsIdentity);
+                return principal.IsInRole(groupName);
+            }
+
+            // Fallback: Check claims in the current user principal
+            if (httpContext?.User != null)
+            {
+                return httpContext.User.IsInRole(groupName);
+            }
+
+            return false;
         }
         catch (Exception ex)
         {
@@ -129,14 +176,14 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     /// </summary>
     public IEnumerable<string> GetUserGroups()
     {
+        var username = GetCurrentUsername();
+        if (string.IsNullOrEmpty(username))
+            return Enumerable.Empty<string>();
+
         try
         {
-            var identity = GetCurrentWindowsIdentity();
-            if (identity == null)
-                return Enumerable.Empty<string>();
-
             using var context = new PrincipalContext(ContextType.Domain);
-            using var user = UserPrincipal.FindByIdentity(context, identity.Name);
+            using var user = UserPrincipal.FindByIdentity(context, username);
 
             if (user == null)
                 return Enumerable.Empty<string>();
@@ -147,9 +194,14 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
 
             return groups;
         }
+        catch (PrincipalServerDownException)
+        {
+            _logger.LogDebug("Domain server unavailable, groups not available for {Username}", username);
+            return Enumerable.Empty<string>();
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting user groups");
+            _logger.LogWarning(ex, "Error getting user groups for {Username}", username);
             return Enumerable.Empty<string>();
         }
     }
@@ -161,41 +213,65 @@ public class WindowsAuthenticationService : IWindowsAuthenticationService
     {
         try
         {
-            var identity = GetCurrentWindowsIdentity();
-            if (identity == null)
+            var httpContext = _httpContextAccessor.HttpContext;
+            var currentIdentity = httpContext?.User?.Identity;
+
+            if (currentIdentity == null || !currentIdentity.IsAuthenticated)
                 return null;
 
-            using var context = new PrincipalContext(ContextType.Domain);
-            using var user = UserPrincipal.FindByIdentity(context, identity.Name);
+            var username = currentIdentity.Name;
+            var authenticationType = currentIdentity.AuthenticationType ?? "Unknown";
 
-            return new WindowsUserInfo
+            // Try to get additional info from Active Directory
+            try
             {
-                Username = identity.Name,
-                DisplayName = user?.DisplayName ?? identity.Name,
-                EmailAddress = user?.EmailAddress,
-                IsAuthenticated = identity.IsAuthenticated,
-                AuthenticationType = identity.AuthenticationType,
-                Groups = GetUserGroups().ToList()
-            };
+                using var context = new PrincipalContext(ContextType.Domain);
+                using var user = UserPrincipal.FindByIdentity(context, username);
+
+                return new WindowsUserInfo
+                {
+                    Username = username,
+                    DisplayName = user?.DisplayName ?? username,
+                    EmailAddress = user?.EmailAddress,
+                    IsAuthenticated = currentIdentity.IsAuthenticated,
+                    AuthenticationType = authenticationType,
+                    Groups = GetUserGroups().ToList()
+                };
+            }
+            catch (PrincipalServerDownException)
+            {
+                _logger.LogDebug("Domain server unavailable for {Username}, returning basic info without AD data", username);
+
+                // Return basic info if domain is unavailable
+                return new WindowsUserInfo
+                {
+                    Username = username,
+                    DisplayName = username,
+                    EmailAddress = null,
+                    IsAuthenticated = currentIdentity.IsAuthenticated,
+                    AuthenticationType = authenticationType,
+                    Groups = new List<string>()
+                };
+            }
+            catch (Exception adEx)
+            {
+                _logger.LogWarning(adEx, "Could not retrieve AD info for {Username}, returning basic info", username);
+
+                // Return basic info if AD lookup fails
+                return new WindowsUserInfo
+                {
+                    Username = username,
+                    DisplayName = username,
+                    EmailAddress = null,
+                    IsAuthenticated = currentIdentity.IsAuthenticated,
+                    AuthenticationType = authenticationType,
+                    Groups = new List<string>()
+                };
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting user info");
-
-            // Return basic info if AD lookup fails
-            var identity = GetCurrentWindowsIdentity();
-            if (identity != null)
-            {
-                return new WindowsUserInfo
-                {
-                    Username = identity.Name,
-                    DisplayName = identity.Name,
-                    IsAuthenticated = identity.IsAuthenticated,
-                    AuthenticationType = identity.AuthenticationType,
-                    Groups = new List<string>()
-                };
-            }
-
             return null;
         }
     }

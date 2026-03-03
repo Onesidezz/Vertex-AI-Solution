@@ -176,7 +176,7 @@ builder.Services.AddScoped<ContentManagerServices>();
 // Application Services
 builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
 builder.Services.AddScoped<ITextChunkingService, TextChunkingService>();
-builder.Services.AddScoped<IEmbeddingService, GeminiEmbeddingService>(); // Google Gemini embedding service
+builder.Services.AddScoped<IEmbeddingService, OllamaEmbeddingService>(); // Ollama embedding service with bge-m3
 
 // Vector Database - PostgreSQL with pgvector
 builder.Services.AddScoped<PgVectorService>(); // PostgreSQL vector database service
@@ -191,9 +191,12 @@ builder.Services.AddScoped<IRecordSearchService, RecordSearchService>();
 
 // Record Search Helper Services (segregated from RecordSearchService)
 builder.Services.AddScoped<IRecordSearchHelperServices, RecordSearchHelperServices>();
-builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServices>();
+builder.Services.AddScoped<IRecordSearchGoogleServices, OllamaGemma7bService>(); // Local Ollama Gemma 7B service
 
-// AI Record Services (Summary and Q&A using Gemini)
+// Reranker Service (cross-encoder via Ollama /api/rerank — bge-reranker-v2-m3)
+builder.Services.AddScoped<IRerankerService, OllamaRerankerService>();
+
+// AI Record Services (Summary and Q&A using local Ollama Gemma 7B)
 builder.Services.AddScoped<IAIRecordService, AIRecordService>();
 
 // Windows Authentication Service

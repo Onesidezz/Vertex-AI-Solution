@@ -175,6 +175,18 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 keywords.Add(match.Value);
             }
 
+            // 8. WEEK-OF-YEAR PATTERNS — Generate compound token matching embedded text.
+            // The embedder stores "Week4 of 2026" (no space between "Week" and the number).
+            // A natural query like "Week 4 of 2026" splits into separate FTS tokens, so it
+            // never matches the compound token. Adding "Week4" explicitly fixes this.
+            var weekOfYearMatch = System.Text.RegularExpressions.Regex.Match(
+                query, @"[Ww]eek\s+(\d{1,2})(?:\s+of\s+\d{4})?");
+            if (weekOfYearMatch.Success)
+            {
+                var weekNum = weekOfYearMatch.Groups[1].Value;
+                keywords.Add($"Week{weekNum}"); // e.g., "Week4" — matches embedded "Week4 of 2026"
+            }
+
             // Remove duplicates and filter out redundant single words that are part of phrases
             var uniqueKeywords = new List<string>();
             var keywordsLower = keywords.Select(k => k.ToLowerInvariant()).ToList();
@@ -1408,7 +1420,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
         /// </summary>
         public int CalculateDynamicSearchLimit(int topK, bool isEarliest, bool isLatest, DateTime? startDate, DateTime? endDate, int fileTypeFiltersCount, int contentKeywordsCount)
         {
-            var baseMultiplier = 3; // Base multiplier for simple queries
+            var baseMultiplier = 5; // Base multiplier for simple queries
 
             // Increase multiplier for complex queries
             if (isEarliest || isLatest)
@@ -1421,7 +1433,7 @@ namespace DocumentProcessingAPI.Infrastructure.Services
                 baseMultiplier += 5; // File type filtering
 
             if (contentKeywordsCount > 2)
-                baseMultiplier += 3; // Complex content queries
+                baseMultiplier += 5; // Complex content queries
 
             // Cap the maximum
             return Math.Min(topK * baseMultiplier, 1000);
