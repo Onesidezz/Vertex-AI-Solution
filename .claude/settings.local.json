@@ -7,7 +7,14 @@
       "Bash(dotnet build:*)",
       "Bash(Select-String -Pattern \"error CS\")",
       "Bash(psql:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(tail:*)",
+      "Bash(curl:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(powershell:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(python3:*)"
     ]
   }
 }

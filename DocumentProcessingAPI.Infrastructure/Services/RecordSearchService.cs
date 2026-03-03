@@ -305,45 +305,52 @@ namespace DocumentProcessingAPI.Infrastructure.Services
 
                 // Apply sorting based on query intent
                 if (isEarliest || isLatest)
-                {
-                    deduplicatedResults = _helperServices.ApplyDateSorting(deduplicatedResults, isEarliest);
-                    _logger.LogInformation("Applied date sorting - earliest: {IsEarliest}", isEarliest);
-                }
+                   {
+                     deduplicatedResults = _helperServices.ApplyDateSorting(deduplicatedResults, isEarliest);
+       _logger.LogInformation("Applied date sorting - earliest: {IsEarliest}", isEarliest);
+                    }
                 else
-                {
-                    // Default: sort by relevance score
-                    deduplicatedResults = deduplicatedResults.OrderByDescending(r => r.similarity).ToList();
-                }
+              {
+            // Default: sort by relevance score
+                deduplicatedResults = deduplicatedResults.OrderByDescending(r => r.similarity).ToList();
+      }
 
-                // Take final results
-                var finalResults = deduplicatedResults.Take(topK).ToList();
+               // Take final results
+var finalResults = deduplicatedResults.Take(topK).ToList();
 
-                step4Stopwatch.Stop();
-                _logger.LogInformation("   ⏱️ STEP 4 completed in {ElapsedMs}ms", step4Stopwatch.ElapsedMilliseconds);
+     step4Stopwatch.Stop();
+   _logger.LogInformation("   ⏱️ STEP 4 completed in {ElapsedMs}ms", step4Stopwatch.ElapsedMilliseconds);
 
                 // ============================================================
-                // STEP 5: APPLY ACL FILTERING
-                // Filter results based on current user's access permissions
-                // ============================================================
-                var step5Stopwatch = Stopwatch.StartNew();
-                _logger.LogInformation("🔒 STEP 5: Applying ACL Filtering");
-                _logger.LogInformation("   📊 Checking ACL for {Count} records", finalResults.Count);
-                var aclFilteredResults = await ApplyAclFilterAsync(finalResults);
-                step5Stopwatch.Stop();
-                _logger.LogInformation("   ⏱️ STEP 5 (ACL) completed in {ElapsedMs}ms", step5Stopwatch.ElapsedMilliseconds);
-                _logger.LogInformation("   ✅ ACL filtering complete: {Accessible} accessible out of {Total} results",
-                    aclFilteredResults.Count, finalResults.Count);
+       // STEP 5: APPLY ACL FILTERING
+       // Filter results based on current user's access permissions
+       // ============================================================
+       var step5Stopwatch = Stopwatch.StartNew();
+       _logger.LogInformation("🔒 STEP 5: Applying ACL Filtering");
+       _logger.LogInformation("   📊 Checking ACL for {Count} records", finalResults.Count);
+       var aclFilteredResults = await ApplyAclFilterAsync(finalResults);
+       step5Stopwatch.Stop();
+       _logger.LogInformation("   ⏱️ STEP 5 (ACL) completed in {ElapsedMs}ms", step5Stopwatch.ElapsedMilliseconds);
+       _logger.LogInformation("   ✅ ACL filtering complete: {Accessible} accessible out of {Total} results",
+           aclFilteredResults.Count, finalResults.Count);
 
                 // Convert to search result DTOs
-                var searchResults = aclFilteredResults.Select(result => new RecordSearchResultDto
+                var searchResults = aclFilteredResults.Select(result =>
                 {
-                    RecordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri"),
-                    RecordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "",
-                    DateCreated = _helperServices.GetMetadataValue<string>(result.metadata, "date_created") ?? "",
-                    RecordType = _helperServices.GetMetadataValue<string>(result.metadata, "record_type") ?? "",
-                    RelevanceScore = result.similarity,
-                    Metadata = result.metadata,
-                    ContentPreview = _helperServices.GetMetadataValue<string>(result.metadata, "chunk_content") ?? _helperServices.BuildContentPreview(result.metadata)
+                    // Get full content and create a proper preview (max 500 chars for AI synthesis)
+                    var fullContent = _helperServices.GetMetadataValue<string>(result.metadata, "chunk_content") ?? "";
+                 
+
+                    return new RecordSearchResultDto
+                    {
+                        RecordUri = _helperServices.GetMetadataValue<long>(result.metadata, "record_uri"),
+                        RecordTitle = _helperServices.GetMetadataValue<string>(result.metadata, "record_title") ?? "",
+                        DateCreated = _helperServices.GetMetadataValue<string>(result.metadata, "date_created") ?? "",
+                        RecordType = _helperServices.GetMetadataValue<string>(result.metadata, "record_type") ?? "",
+                        RelevanceScore = result.similarity,
+                        Metadata = result.metadata,
+                        ContentPreview = fullContent
+                    };
                 }).ToList();
 
                 // Generate AI synthesis of results

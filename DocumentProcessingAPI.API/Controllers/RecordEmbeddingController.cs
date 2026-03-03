@@ -103,6 +103,41 @@ namespace DocumentProcessingAPI.API.Controllers
         }
 
         /// <summary>
+        /// TEST: Process a single record by URI for testing embedding generation
+        /// </summary>
+        /// <param name="recordUri">The Content Manager record URI to process</param>
+        /// <returns>Processing result</returns>
+        [HttpPost("test-record/{recordUri}")]
+        public async Task<ActionResult<ProcessRecordsResponseDto>> TestProcessSingleRecord(long recordUri)
+        {
+            try
+            {
+                _logger.LogInformation("TEST API: Processing single record URI: {RecordUri}", recordUri);
+
+                var processedCount = await _recordEmbeddingService.ProcessSingleRecordAsync(recordUri);
+
+                return Ok(new ProcessRecordsResponseDto
+                {
+                    Success = processedCount > 0,
+                    ProcessedCount = processedCount,
+                    Message = processedCount > 0
+                        ? $"Successfully processed record {recordUri} ({processedCount} chunks created)"
+                        : $"Failed to process record {recordUri}"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "TEST API: Failed to process record URI: {RecordUri}", recordUri);
+                return StatusCode(500, new ProcessRecordsResponseDto
+                {
+                    Success = false,
+                    ProcessedCount = 0,
+                    Message = $"Error processing record {recordUri}: {ex.Message}"
+                });
+            }
+        }
+
+        /// <summary>
         /// Delete all embeddings (chunks) for a specific Content Manager record URI
         /// This removes all vector data associated with the record from the vector database
         /// </summary>

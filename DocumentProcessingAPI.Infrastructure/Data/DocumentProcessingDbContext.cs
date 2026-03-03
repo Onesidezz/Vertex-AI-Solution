@@ -43,10 +43,10 @@ public class DocumentProcessingDbContext : DbContext
             .IsRequired()
             .HasMaxLength(255);
 
-        // Configure vector column (3072 dimensions for Gemini embeddings)
+        // Configure vector column (1024 dimensions for ONNX embeddings)
         entity.Property(e => e.Vector)
             .IsRequired()
-            .HasColumnType("vector(3072)");
+            .HasColumnType("vector(1024)");
 
         entity.Property(e => e.RecordUri)
             .IsRequired();
@@ -121,11 +121,10 @@ public class DocumentProcessingDbContext : DbContext
         entity.HasIndex(e => e.EntityType)
             .HasDatabaseName("IX_Embeddings_EntityType");
 
-        // NOTE: Vector index creation skipped in migration
-        // pgvector v0.8.1 has a 2000-dimension limit for HNSW and IVFFlat indexes
-        // Gemini embeddings are 3072 dimensions
-        // Vector search will still work (using sequential scan initially)
-        // Index can be added manually after data is loaded or when pgvector supports >2000 dims
+        // NOTE: Vector index can be created for 1024-dimensional embeddings
+        // pgvector supports HNSW and IVFFlat indexes up to 2000 dimensions
+        // ONNX embeddings are 1024 dimensions - well within the limit
+        // Index can be created after initial data load for better performance
     }
 
     private static void ConfigureSyncCheckpointEntity(ModelBuilder modelBuilder)

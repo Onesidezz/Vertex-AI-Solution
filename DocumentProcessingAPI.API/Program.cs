@@ -176,7 +176,7 @@ builder.Services.AddScoped<ContentManagerServices>();
 // Application Services
 builder.Services.AddScoped<IDocumentProcessor, DocumentProcessor>();
 builder.Services.AddScoped<ITextChunkingService, TextChunkingService>();
-builder.Services.AddScoped<IEmbeddingService, GeminiEmbeddingService>(); // Google Gemini embedding service
+builder.Services.AddScoped<IEmbeddingService, GeminiEmbeddingService>(); // Vertex AI embedding service with gemini-embedding-001
 
 // Vector Database - PostgreSQL with pgvector
 builder.Services.AddScoped<PgVectorService>(); // PostgreSQL vector database service
@@ -191,9 +191,9 @@ builder.Services.AddScoped<IRecordSearchService, RecordSearchService>();
 
 // Record Search Helper Services (segregated from RecordSearchService)
 builder.Services.AddScoped<IRecordSearchHelperServices, RecordSearchHelperServices>();
-builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServices>();
+builder.Services.AddScoped<IRecordSearchGoogleServices, RecordSearchGoogleServices>(); // Google Vertex AI Gemini service
 
-// AI Record Services (Summary and Q&A using Gemini)
+// AI Record Services (Summary and Q&A using Vertex AI Gemini)
 builder.Services.AddScoped<IAIRecordService, AIRecordService>();
 
 // Windows Authentication Service
@@ -207,12 +207,12 @@ builder.Services.AddScoped<AclAnalysisService>();
 //{
 //    // Use a scoped job factory to support DI in jobs
 //    q.UseMicrosoftDependencyInjectionJobFactory();
-
+//
 //    // Get configuration
 //    var cronSchedule = builder.Configuration["RecordSync:CronSchedule"] ?? "0 0 * * * ?"; // Default: Every hour
 //    var searchString = builder.Configuration["RecordSync:SearchString"] ?? "*";
 //    var enableSync = bool.Parse(builder.Configuration["RecordSync:Enabled"] ?? "true");
-
+//
 //    // Create job
 //    var jobKey = new Quartz.JobKey("record-sync-job", "content-manager-sync");
 //    q.AddJob<DocumentProcessingAPI.Infrastructure.Jobs.RecordSyncJob>(opts => opts
@@ -221,7 +221,7 @@ builder.Services.AddScoped<AclAnalysisService>();
 //        .UsingJobData("SearchString", searchString)
 //        .UsingJobData("EnableSync", enableSync)
 //        .StoreDurably());
-
+//
 //    // Create trigger with cron schedule
 //    q.AddTrigger(opts => opts
 //        .ForJob(jobKey)

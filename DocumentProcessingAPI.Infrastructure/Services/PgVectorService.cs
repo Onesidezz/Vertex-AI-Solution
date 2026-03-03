@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace DocumentProcessingAPI.Infrastructure.Services;
 
@@ -586,16 +587,11 @@ public class PgVectorService
             // Get initial semantic search results
             var semanticResults = await SearchSimilarAsync(queryEmbedding, expandedLimit, 0, recordUriFilter);
 
-            if (!semanticResults.Any())
-            {
-                return new List<(string, float, Dictionary<string, object>)>();
-            }
-
             // Use raw query text directly with PostgreSQL FTS
             if (string.IsNullOrWhiteSpace(queryText))
             {
                 _logger.LogWarning("   ⚠️ No query text provided for FTS boosting, using semantic-only results");
-                return semanticResults.Take(limit).ToList();
+                return semanticResults.Take(limit).Where(r => r.similarity >= threshold).ToList();
             }
 
             _logger.LogDebug("   📋 Boosting with PostgreSQL FTS query: {Query}", queryText);
@@ -603,27 +599,52 @@ public class PgVectorService
             // Escape single quotes for SQL parameter (websearch_to_tsquery will handle the rest)
             var sanitizedQuery = queryText.Replace("'", "''");
 
-            // Get embedding IDs from semantic results
-            var embeddingIds = semanticResults.Select(r => r.id).ToList();
-
-            // Query PostgreSQL FTS scores using ts_rank() for the semantic result IDs
-            // websearch_to_tsquery() intelligently parses the query with:
+            // FIXED: Query PostgreSQL FTS scores across ALL embeddings (not just semantic results)
+            // This ensures keyword matches are found even if they're not semantically similar
+            // plainto_tsquery() uses OR logic (finds ANY of the words):
             // - Automatic stop word removal
             // - Stemming (workflow → work, workflows)
-            // - Boolean operators (AND, OR, NOT)
-            // - Phrase matching with quotes
+            // - OR logic: matches if ANY query word is present
+            // - More forgiving than websearch_to_tsquery (which uses AND logic)
             var ftsScoresSql = $@"
                 SELECT
                     ""EmbeddingId"",
-                    ts_rank(search_vector, websearch_to_tsquery('english', @p0)) as fts_score
+                    ""RecordUri"",
+                    ""RecordTitle"",
+                    ""DateCreated"",
+                    ""RecordType"",
+                    ""Container"",
+                    ""Assignee"",
+                    ""AllParts"",
+                    ""ACL"",
+                    ""ChunkIndex"",
+                    ""ChunkSequence"",
+                    ""TotalChunks"",
+                    ""TokenCount"",
+                    ""StartPosition"",
+                    ""EndPosition"",
+                    ""PageNumber"",
+                    ""ChunkContent"",
+                    ""ContentPreview"",
+                    ""FileExtension"",
+                    ""FileType"",
+                    ""DocumentCategory"",
+                    ""EntityType"",
+                    ""IndexedAt"",
+                    ts_rank(search_vector, plainto_tsquery('english', @p0)) as fts_score
                 FROM ""Embeddings""
-                WHERE ""EmbeddingId"" = ANY(@p1)
-                AND search_vector @@ websearch_to_tsquery('english', @p0)";
+                WHERE search_vector @@ plainto_tsquery('english', @p0)
+                ORDER BY fts_score DESC
+                LIMIT @p1";
 
             var connection = _context.Database.GetDbConnection();
-            await connection.OpenAsync();
+            if (connection.State != System.Data.ConnectionState.Open)
+            {
+                await connection.OpenAsync();
+            }
 
             var ftsScores = new Dictionary<string, float>();
+            var ftsResults = new List<(string id, float ftsScore, Dictionary<string, object> metadata)>();
 
             using (var command = connection.CreateCommand())
             {
@@ -636,63 +657,269 @@ public class PgVectorService
 
                 var p1 = command.CreateParameter();
                 p1.ParameterName = "@p1";
-                p1.Value = embeddingIds.ToArray();
+                p1.Value = expandedLimit;
                 command.Parameters.Add(p1);
+
+                _logger.LogDebug("   🔍 FTS SQL Query: {Query}", ftsScoresSql);
+                _logger.LogDebug("   🔍 FTS Parameters: @p0='{QueryText}', @p1={Limit}", sanitizedQuery, expandedLimit);
 
                 using (var reader = await command.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
                     {
                         var embeddingId = reader.GetString(0);
-                        var ftsScore = reader.GetFloat(1);
+                        var ftsScore = reader.GetFloat(23);
+
                         ftsScores[embeddingId] = ftsScore;
+
+                        // Build metadata for FTS results
+                        var metadata = new Dictionary<string, object>
+                        {
+                            ["record_uri"] = reader.GetInt64(1),
+                            ["record_title"] = reader.IsDBNull(2) ? "" : reader.GetString(2),
+                            ["date_created"] = reader.IsDBNull(3) ? "" : reader.GetDateTime(3).ToString("MM/dd/yyyy HH:mm:ss"),
+                            ["record_type"] = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                            ["container"] = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                            ["assignee"] = reader.IsDBNull(6) ? "" : reader.GetString(6),
+                            ["all_parts"] = reader.IsDBNull(7) ? "" : reader.GetString(7),
+                            ["acl"] = reader.IsDBNull(8) ? "" : reader.GetString(8),
+                            ["chunk_index"] = reader.GetInt32(9),
+                            ["chunk_sequence"] = reader.GetInt32(10),
+                            ["total_chunks"] = reader.GetInt32(11),
+                            ["token_count"] = reader.GetInt32(12),
+                            ["start_position"] = reader.GetInt32(13),
+                            ["end_position"] = reader.GetInt32(14),
+                            ["page_number"] = reader.GetInt32(15),
+                            ["chunk_content"] = reader.IsDBNull(16) ? "" : reader.GetString(16),
+                            ["content_preview"] = reader.IsDBNull(17) ? "" : reader.GetString(17),
+                            ["file_extension"] = reader.IsDBNull(18) ? "" : reader.GetString(18),
+                            ["file_type"] = reader.IsDBNull(19) ? "" : reader.GetString(19),
+                            ["document_category"] = reader.IsDBNull(20) ? "" : reader.GetString(20),
+                            ["entity_type"] = reader.IsDBNull(21) ? "" : reader.GetString(21),
+                            ["indexed_at"] = reader.GetDateTime(22).ToString("o"),
+                            ["string_id"] = embeddingId
+                        };
+
+                        ftsResults.Add((embeddingId, ftsScore, metadata));
                     }
                 }
             }
 
             await connection.CloseAsync();
 
-            _logger.LogDebug("   📊 FTS matched {Count}/{Total} semantic results", ftsScores.Count, semanticResults.Count);
+            _logger.LogInformation("   📊 FTS found {FtsCount} keyword matches across all embeddings", ftsResults.Count);
+            _logger.LogDebug("   📊 Semantic search found {SemanticCount} results", semanticResults.Count);
+
+            // FALLBACK: If FTS found nothing, try LIKE search with individual words (OR logic)
+            if (!ftsResults.Any() && queryText.Length > 5)
+            {
+                _logger.LogWarning("   ⚠️ FTS returned 0 results, attempting fallback LIKE search with OR logic");
+
+                // Split query into words and filter out common stop words
+                var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "which", "what", "where", "when", "who", "how", "is", "are", "was", "were",
+                    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+                    "with", "by", "from", "called", "named", "titled", "book", "document", "file"
+                };
+
+                var words = queryText.Split(new[] { ' ', ',', '.', '?', '!' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(w => w.Length > 2 && !stopWords.Contains(w))
+                    .Select(w => w.Replace("'", "''"))
+                    .ToList();
+
+                if (!words.Any())
+                {
+                    _logger.LogWarning("   ⚠️ No meaningful words found after filtering");
+                }
+                else
+                {
+                    _logger.LogInformation("   🔍 Searching for words: {Words}", string.Join(", ", words));
+
+                    // Build WHERE clause with OR conditions for each word
+                    var whereConditions = string.Join(" OR ", words.Select((_, i) => $@"""ChunkContent"" ILIKE @w{i}"));
+
+                    var likeSearchSql = $@"
+                        SELECT
+                            ""EmbeddingId"",
+                            ""RecordUri"",
+                            ""RecordTitle"",
+                            ""DateCreated"",
+                            ""RecordType"",
+                            ""Container"",
+                            ""Assignee"",
+                            ""AllParts"",
+                            ""ACL"",
+                            ""ChunkIndex"",
+                            ""ChunkSequence"",
+                            ""TotalChunks"",
+                            ""TokenCount"",
+                            ""StartPosition"",
+                            ""EndPosition"",
+                            ""PageNumber"",
+                            ""ChunkContent"",
+                            ""ContentPreview"",
+                            ""FileExtension"",
+                            ""FileType"",
+                            ""DocumentCategory"",
+                            ""EntityType"",
+                            ""IndexedAt""
+                        FROM ""Embeddings""
+                        WHERE {whereConditions}
+                        LIMIT @p1";
+
+                    if (connection.State != System.Data.ConnectionState.Open)
+                    {
+                        await connection.OpenAsync();
+                    }
+
+                    using (var likeCommand = connection.CreateCommand())
+                    {
+                        likeCommand.CommandText = likeSearchSql;
+
+                        // Add parameter for each word
+                        for (int i = 0; i < words.Count; i++)
+                        {
+                            var param = likeCommand.CreateParameter();
+                            param.ParameterName = $"@w{i}";
+                            param.Value = $"%{words[i]}%";
+                            likeCommand.Parameters.Add(param);
+                        }
+
+                        var lp1 = likeCommand.CreateParameter();
+                        lp1.ParameterName = "@p1";
+                        lp1.Value = Math.Min(expandedLimit, 100);
+                        likeCommand.Parameters.Add(lp1);
+
+                        using (var likeReader = await likeCommand.ExecuteReaderAsync())
+                    {
+                        while (await likeReader.ReadAsync())
+                        {
+                            var embeddingId = likeReader.GetString(0);
+                            // Assign a fixed score for LIKE matches (0.8 to prioritize them)
+                            var likeScore = 0.8f;
+
+                            ftsScores[embeddingId] = likeScore;
+
+                            var metadata = new Dictionary<string, object>
+                            {
+                                ["record_uri"] = likeReader.GetInt64(1),
+                                ["record_title"] = likeReader.IsDBNull(2) ? "" : likeReader.GetString(2),
+                                ["date_created"] = likeReader.IsDBNull(3) ? "" : likeReader.GetDateTime(3).ToString("MM/dd/yyyy HH:mm:ss"),
+                                ["record_type"] = likeReader.IsDBNull(4) ? "" : likeReader.GetString(4),
+                                ["container"] = likeReader.IsDBNull(5) ? "" : likeReader.GetString(5),
+                                ["assignee"] = likeReader.IsDBNull(6) ? "" : likeReader.GetString(6),
+                                ["all_parts"] = likeReader.IsDBNull(7) ? "" : likeReader.GetString(7),
+                                ["acl"] = likeReader.IsDBNull(8) ? "" : likeReader.GetString(8),
+                                ["chunk_index"] = likeReader.GetInt32(9),
+                                ["chunk_sequence"] = likeReader.GetInt32(10),
+                                ["total_chunks"] = likeReader.GetInt32(11),
+                                ["token_count"] = likeReader.GetInt32(12),
+                                ["start_position"] = likeReader.GetInt32(13),
+                                ["end_position"] = likeReader.GetInt32(14),
+                                ["page_number"] = likeReader.GetInt32(15),
+                                ["chunk_content"] = likeReader.IsDBNull(16) ? "" : likeReader.GetString(16),
+                                ["content_preview"] = likeReader.IsDBNull(17) ? "" : likeReader.GetString(17),
+                                ["file_extension"] = likeReader.IsDBNull(18) ? "" : likeReader.GetString(18),
+                                ["file_type"] = likeReader.IsDBNull(19) ? "" : likeReader.GetString(19),
+                                ["document_category"] = likeReader.IsDBNull(20) ? "" : likeReader.GetString(20),
+                                ["entity_type"] = likeReader.IsDBNull(21) ? "" : likeReader.GetString(21),
+                                ["indexed_at"] = likeReader.GetDateTime(22).ToString("o"),
+                                ["string_id"] = embeddingId
+                            };
+
+                            ftsResults.Add((embeddingId, likeScore, metadata));
+                        }
+                    }
+                    }
+
+                    await connection.CloseAsync();
+
+                    if (ftsResults.Any())
+                    {
+                        _logger.LogInformation("   ✅ LIKE search found {Count} matches", ftsResults.Count);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("   ⚠️ LIKE search also found 0 matches");
+                    }
+                }
+            }
+
+            // Merge semantic and FTS results (union by embedding ID)
+            var allResultsById = new Dictionary<string, (float semanticScore, float ftsScore, Dictionary<string, object> metadata)>();
+
+            // Add semantic results
+            foreach (var r in semanticResults)
+            {
+                allResultsById[r.id] = (r.similarity, 0f, r.metadata);
+            }
+
+            // Add/merge FTS results
+            foreach (var r in ftsResults)
+            {
+                if (allResultsById.ContainsKey(r.id))
+                {
+                    // Already in semantic results - add FTS score
+                    var existing = allResultsById[r.id];
+                    allResultsById[r.id] = (existing.semanticScore, r.ftsScore, existing.metadata);
+                }
+                else
+                {
+                    // Only in FTS results - add with 0 semantic score
+                    allResultsById[r.id] = (0f, r.ftsScore, r.metadata);
+                }
+            }
+
+            _logger.LogInformation("   📊 Merged results: {Total} unique embeddings ({Semantic} semantic, {Fts} FTS, {Both} both)",
+                allResultsById.Count, semanticResults.Count, ftsResults.Count,
+                semanticResults.Count + ftsResults.Count - allResultsById.Count);
 
             // Normalize FTS scores to 0-1 range
             var maxFtsScore = ftsScores.Values.Any() ? ftsScores.Values.Max() : 1.0f;
-            var normalizedFtsScores = ftsScores.ToDictionary(
-                kvp => kvp.Key,
-                kvp => maxFtsScore > 0 ? kvp.Value / maxFtsScore : 0f
-            );
 
-            // Apply hybrid scoring: semantic similarity + FTS score boost
-            var hybridResults = semanticResults.Select(r =>
+            // If LIKE fallback was used, prioritize keyword matches much more heavily
+            var hasLikeFallbackResults = ftsScores.Values.Any(s => s == 0.8f); // LIKE matches have score 0.8
+            var effectiveKeywordWeight = hasLikeFallbackResults ? 0.9f : keywordBoostWeight; // 90% for LIKE, 30% for FTS
+
+            if (hasLikeFallbackResults)
             {
-                var semanticScore = r.similarity;
+                _logger.LogInformation("   🎯 LIKE fallback active - using {Weight}% keyword weight to prioritize exact matches",
+                    (int)(effectiveKeywordWeight * 100));
+            }
 
-                // Get normalized FTS score (0 if no FTS match)
-                var ftsScore = normalizedFtsScores.GetValueOrDefault(r.id, 0f);
+            // Apply hybrid scoring to merged results
+            var hybridResults = allResultsById.Select(kvp =>
+            {
+                var (semanticScore, ftsScore, metadata) = kvp.Value;
+
+                // Normalize FTS score
+                var normalizedFtsScore = maxFtsScore > 0 ? ftsScore / maxFtsScore : 0f;
 
                 // Hybrid score: weighted combination
-                // keywordBoostWeight controls FTS influence (default 0.3 = 30% FTS, 70% semantic)
-                var hybridScore = (semanticScore * (1 - keywordBoostWeight)) + (ftsScore * keywordBoostWeight);
+                // When LIKE fallback is active, keyword matches get 90% weight (vs 30% for normal FTS)
+                var hybridScore = (semanticScore * (1 - effectiveKeywordWeight)) + (normalizedFtsScore * effectiveKeywordWeight);
 
-                return (r.id, score: hybridScore, r.metadata, originalSemanticScore: semanticScore, ftsScore);
+                return (id: kvp.Key, score: hybridScore, metadata, semanticScore, normalizedFtsScore);
             })
             .OrderByDescending(r => r.score)
             .Take(limit)
             .Select(r =>
             {
                 // Log significant FTS boosts
-                if (r.ftsScore > 0.5f)
+                if (r.normalizedFtsScore > 0.5f)
                 {
                     var uri = r.metadata.ContainsKey("record_uri") ? r.metadata["record_uri"] : "?";
                     _logger.LogDebug("   ⬆️ FTS boost for URI {Uri}: Semantic={Semantic:F3}, FTS={Fts:F3} → Hybrid={Hybrid:F3}",
-                        uri, r.originalSemanticScore, r.ftsScore, r.score);
+                        uri, r.semanticScore, r.normalizedFtsScore, r.score);
                 }
                 return (r.id, r.score, r.metadata);
             })
             .Where(r => r.score >= threshold)
             .ToList();
 
-            _logger.LogInformation("✅ Hybrid FTS search returned {Count} results (from {Total} semantic results, {FtsCount} with FTS matches)",
-                hybridResults.Count, semanticResults.Count, ftsScores.Count);
+            _logger.LogInformation("✅ Hybrid search returned {Count} results (semantic: {SemanticCount}, FTS: {FtsCount})",
+                hybridResults.Count, semanticResults.Count, ftsResults.Count);
 
             return hybridResults;
         }
@@ -986,6 +1213,161 @@ public class PgVectorService
             _logger.LogError(ex, "❌ Failed to find most relevant chunk for record URI: {RecordUri}", recordUri);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Find the top N most relevant chunks for a query using semantic search
+    /// Used to cover topics spread across multiple sections of the document
+    /// </summary>
+    /// <param name="queryEmbedding">The query embedding vector</param>
+    /// <param name="recordUri">Filter to specific record URI</param>
+    /// <param name="topN">Number of top chunks to return (default 5)</param>
+    /// <param name="threshold">Minimum similarity threshold (default 0.2)</param>
+    /// <returns>List of top relevant Embedding entities ordered by similarity</returns>
+    public async Task<List<Embedding>> FindTopRelevantChunksAsync(
+        float[] queryEmbedding,
+        long recordUri,
+        int topN = 5,
+        float threshold = 0.2f)
+    {
+        try
+        {
+            _logger.LogDebug("🔍 Finding top {TopN} relevant chunks for record URI: {RecordUri}", topN, recordUri);
+
+            var queryVector = new Vector(queryEmbedding);
+
+            var results = await _context.Embeddings
+                .Where(e => e.RecordUri == recordUri)
+                .OrderBy(e => e.Vector.CosineDistance(queryVector))
+                .Select(e => new
+                {
+                    Embedding = e,
+                    Distance = e.Vector.CosineDistance(queryVector)
+                })
+                .Take(topN)
+                .ToListAsync();
+
+            var filtered = results
+                .Where(r => (float)(1.0 - r.Distance) >= threshold)
+                .Select(r =>
+                {
+                    var similarity = (float)(1.0 - r.Distance);
+                    _logger.LogDebug("   Chunk Seq={Seq}, Page={Page}, Similarity={Sim:F3}",
+                        r.Embedding.ChunkSequence, r.Embedding.PageNumber, similarity);
+                    return r.Embedding;
+                })
+                .ToList();
+
+            _logger.LogInformation("✅ Found {Count}/{TopN} relevant chunks above threshold {Threshold}",
+                filtered.Count, topN, threshold);
+
+            return filtered;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Failed to find top relevant chunks for record URI: {RecordUri}", recordUri);
+            return new List<Embedding>();
+        }
+    }
+
+    /// <summary>
+    /// Find top N chunks by keyword/literal search — handles numbers, dollar amounts, proper nouns
+    /// that semantic embeddings often miss. Used as the keyword leg of hybrid search.
+    /// Strategy: (1) PostgreSQL full-text search, (2) ILIKE fallback for tokens FTS misses (e.g. "$20,000")
+    /// </summary>
+    public async Task<List<Embedding>> FindTopChunksByKeywordAsync(
+        string searchText,
+        long recordUri,
+        int topN = 5)
+    {
+        try
+        {
+            _logger.LogDebug("🔑 Keyword searching top {TopN} chunks for record URI: {RecordUri}", topN, recordUri);
+
+            var cleaned = Regex.Replace(searchText, @"[?!""']", "").Trim();
+            if (string.IsNullOrWhiteSpace(cleaned))
+                return new List<Embedding>();
+
+            // --- Pass 1: PostgreSQL full-text search (good for normal words) ---
+            var ftResults = await _context.Embeddings
+                .Where(e => e.RecordUri == recordUri)
+                .Where(e => EF.Functions.ToTsVector("english", e.ChunkContent)
+                    .Matches(EF.Functions.WebSearchToTsQuery("english", cleaned)))
+                .OrderByDescending(e => EF.Functions.ToTsVector("english", e.ChunkContent)
+                    .Rank(EF.Functions.WebSearchToTsQuery("english", cleaned)))
+                .Take(topN)
+                .ToListAsync();
+
+            if (ftResults.Any())
+            {
+                _logger.LogInformation("✅ Keyword (FTS) found {Count} chunks", ftResults.Count);
+                return ftResults;
+            }
+
+            // --- Pass 2: ILIKE fallback — extract specific tokens FTS misses (numbers, $amounts) ---
+            // e.g. "$20,000" → ["20,000", "20000"], "discussion" → ["discussion"]
+            var tokens = ExtractSearchTokens(searchText);
+            _logger.LogDebug("   ILIKE fallback tokens: [{Tokens}]", string.Join(", ", tokens));
+
+            var ilikeResults = new List<Embedding>();
+            foreach (var token in tokens.Take(4))
+            {
+                var pattern = $"%{token}%";
+                var hits = await _context.Embeddings
+                    .Where(e => e.RecordUri == recordUri)
+                    .Where(e => EF.Functions.ILike(e.ChunkContent, pattern))
+                    .Take(topN)
+                    .ToListAsync();
+                ilikeResults.AddRange(hits);
+                if (ilikeResults.Count >= topN) break;
+            }
+
+            var distinct = ilikeResults.DistinctBy(e => e.Id).Take(topN).ToList();
+            _logger.LogInformation("✅ Keyword (ILIKE) found {Count} chunks", distinct.Count);
+            return distinct;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Keyword search failed for record URI: {RecordUri}", recordUri);
+            return new List<Embedding>();
+        }
+    }
+
+    /// <summary>
+    /// Extracts meaningful tokens from a query for ILIKE search.
+    /// Prioritises dollar amounts and numbers, then significant words.
+    /// e.g. "what is the discussion about $20,000" → ["20,000", "20000", "discussion"]
+    /// </summary>
+    private static List<string> ExtractSearchTokens(string query)
+    {
+        var tokens = new List<string>();
+
+        // Dollar amounts: $20,000 or $20000 → add both "20,000" and "20000"
+        foreach (Match m in Regex.Matches(query, @"\$[\d,]+"))
+        {
+            var raw = m.Value.TrimStart('$');          // "20,000"
+            tokens.Add(raw);
+            tokens.Add(raw.Replace(",", ""));          // "20000"
+        }
+
+        // Bare numbers/amounts not preceded by $ (e.g. "20,000")
+        foreach (Match m in Regex.Matches(query, @"\b\d[\d,]*\b"))
+        {
+            var raw = m.Value;
+            if (!tokens.Contains(raw)) tokens.Add(raw);
+        }
+
+        // Significant words (length > 3, not common stop words)
+        var stopWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "what", "when", "where", "which", "that", "this", "with", "from",
+              "about", "have", "does", "were", "been", "they", "their", "there" };
+        foreach (var word in Regex.Split(query, @"\W+"))
+        {
+            if (word.Length > 3 && !stopWords.Contains(word) && !Regex.IsMatch(word, @"^\d+$"))
+                tokens.Add(word);
+        }
+
+        return tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>
