@@ -317,7 +317,7 @@ namespace DocumentProcessingAPI.Core.DTOs
                     }
                     else
                     {
-                        finalSearchString = searchString;
+                        finalSearchString = $"registeredOn:{searchString}";
                     }
                 }
 

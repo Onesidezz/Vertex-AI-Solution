@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 580" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="aw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/></marker>
+    <marker id="ag" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#10b981"/></marker>
+    <marker id="ai" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#6366f1"/></marker>
+    <marker id="ap" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6"/></marker>
+    <marker id="ay" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="580" fill="#0f172a" rx="12"/>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle" font-size="16" font-weight="bold" fill="#e2e8f0">LLM Connector — Architecture Flow</text>
+
+  <!-- ══════════════════════════════════════════════
+       LEFT COLUMN  (CM + Custom UI)
+  ══════════════════════════════════════════════ -->
+
+  <!-- Content Manager -->
+  <rect x="30" y="110" width="130" height="65" rx="8" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+  <text x="95" y="137" text-anchor="middle" font-size="12" font-weight="bold" fill="#93c5fd">Content</text>
+  <text x="95" y="154" text-anchor="middle" font-size="12" font-weight="bold" fill="#93c5fd">Manager (CM)</text>
+  <text x="95" y="168" text-anchor="middle" font-size="8" fill="#60a5fa">OpenText / TRIM</text>
+
+  <!-- Custom UI -->
+  <rect x="30" y="360" width="130" height="65" rx="8" fill="#2d1b4e" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="95" y="387" text-anchor="middle" font-size="12" font-weight="bold" fill="#c4b5fd">Custom UI</text>
+  <text x="95" y="404" text-anchor="middle" font-size="9" fill="#a78bfa">User search query</text>
+  <text x="95" y="418" text-anchor="middle" font-size="20" fill="#a78bfa">👤</text>
+
+  <!-- ══════════════════════════════════════════════
+       CENTER  — single LLM Connector controller
+  ══════════════════════════════════════════════ -->
+
+  <rect x="220" y="80" width="300" height="380" rx="12" fill="#1a1200" stroke="#f59e0b" stroke-width="2.5"/>
+
+  <!-- Header -->
+  <rect x="220" y="80" width="300" height="40" rx="12" fill="#2d1f00"/>
+  <rect x="220" y="100" width="300" height="20" fill="#2d1f00"/>
+  <text x="370" y="106" text-anchor="middle" font-size="13" font-weight="bold" fill="#fcd34d">⚙  LLM Connector</text>
+  <text x="370" y="118" text-anchor="middle" font-size="9" fill="#a16207">Central Controller</text>
+
+  <!-- INGESTION section -->
+  <rect x="232" y="132" width="276" height="150" rx="8" fill="#120e04" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="370" y="150" text-anchor="middle" font-size="10" font-weight="bold" fill="#fbbf24">📥  INGESTION</text>
+
+  <rect x="242" y="158" width="256" height="34" rx="5" fill="#2d1f00"/>
+  <text x="370" y="172" text-anchor="middle" font-size="10" font-weight="bold" fill="#fcd34d">① Schedule &amp; Pull from CM</text>
+  <text x="370" y="184" text-anchor="middle" font-size="8" fill="#78350f">Periodic sync of new / updated docs</text>
+
+  <rect x="242" y="198" width="256" height="34" rx="5" fill="#2d1f00"/>
+  <text x="370" y="212" text-anchor="middle" font-size="10" font-weight="bold" fill="#fcd34d">② Extract Text &amp; Chunk</text>
+  <text x="370" y="224" text-anchor="middle" font-size="8" fill="#78350f">1500 tokens / chunk · 150 token overlap</text>
+
+  <rect x="242" y="238" width="256" height="34" rx="5" fill="#2d1f00"/>
+  <text x="370" y="252" text-anchor="middle" font-size="10" font-weight="bold" fill="#fcd34d">③ Embed → Store in pgvector</text>
+  <text x="370" y="264" text-anchor="middle" font-size="8" fill="#78350f">Vertex AI embedding → PostgreSQL</text>
+
+  <!-- QUERY section -->
+  <rect x="232" y="295" width="276" height="155" rx="8" fill="#120814" stroke="#8b5cf6" stroke-width="1.2"/>
+  <text x="370" y="314" text-anchor="middle" font-size="10" font-weight="bold" fill="#c4b5fd">🔍  QUERY</text>
+
+  <rect x="242" y="320" width="256" height="34" rx="5" fill="#1e0f36"/>
+  <text x="370" y="334" text-anchor="middle" font-size="10" font-weight="bold" fill="#c4b5fd">④ Receive Query from UI</text>
+  <text x="370" y="346" text-anchor="middle" font-size="8" fill="#6d28d9">Validate · session context</text>
+
+  <rect x="242" y="360" width="256" height="34" rx="5" fill="#1e0f36"/>
+  <text x="370" y="374" text-anchor="middle" font-size="10" font-weight="bold" fill="#c4b5fd">⑤ Embed Query → Similarity Search</text>
+  <text x="370" y="386" text-anchor="middle" font-size="8" fill="#6d28d9">Vertex embed → pgvector top-K</text>
+
+  <rect x="242" y="400" width="256" height="34" rx="5" fill="#1e0f36"/>
+  <text x="370" y="414" text-anchor="middle" font-size="10" font-weight="bold" fill="#c4b5fd">⑥ ACL Filter → Gemini RAG → Return</text>
+  <text x="370" y="426" text-anchor="middle" font-size="8" fill="#6d28d9">Permission check · NLP answer · send to UI</text>
+
+  <!-- ══════════════════════════════════════════════
+       RIGHT COLUMN  (Vertex AI + PostgreSQL + Gemini)
+  ══════════════════════════════════════════════ -->
+
+  <!-- Vertex AI -->
+  <rect x="620" y="110" width="210" height="65" rx="8" fill="#0d1f0d" stroke="#10b981" stroke-width="2"/>
+  <text x="725" y="136" text-anchor="middle" font-size="12" font-weight="bold" fill="#6ee7b7">Vertex AI</text>
+  <text x="725" y="153" text-anchor="middle" font-size="10" fill="#34d399">Embedding Model</text>
+  <text x="725" y="167" text-anchor="middle" font-size="8" fill="#064e3b">text-embedding-*</text>
+
+  <!-- PostgreSQL -->
+  <rect x="620" y="255" width="210" height="65" rx="8" fill="#1e1b4b" stroke="#6366f1" stroke-width="2"/>
+  <text x="725" y="281" text-anchor="middle" font-size="12" font-weight="bold" fill="#a5b4fc">PostgreSQL</text>
+  <text x="725" y="298" text-anchor="middle" font-size="10" fill="#818cf8">+ pgvector</text>
+  <text x="725" y="312" text-anchor="middle" font-size="8" fill="#4338ca">Vector store · Doc metadata</text>
+
+  <!-- Gemini -->
+  <rect x="620" y="395" width="210" height="65" rx="8" fill="#0d1f0d" stroke="#10b981" stroke-width="2"/>
+  <text x="725" y="421" text-anchor="middle" font-size="12" font-weight="bold" fill="#6ee7b7">Gemini LLM</text>
+  <text x="725" y="438" text-anchor="middle" font-size="10" fill="#34d399">Generative Model</text>
+  <text x="725" y="452" text-anchor="middle" font-size="8" fill="#064e3b">gemini-2.5-flash · NLP answer</text>
+
+  <!-- ══════════════════════════════════════════════
+       ARROWS
+  ══════════════════════════════════════════════ -->
+
+  <!-- CM → LLM Connector -->
+  <line x1="160" y1="142" x2="220" y2="175" stroke="#3b82f6" stroke-width="2" marker-end="url(#aw)"/>
+  <text x="175" y="150" font-size="9" fill="#60a5fa">docs</text>
+
+  <!-- Custom UI → LLM Connector -->
+  <line x1="160" y1="390" x2="220" y2="370" stroke="#8b5cf6" stroke-width="2" marker-end="url(#aw)"/>
+  <text x="170" y="375" font-size="9" fill="#a78bfa">query</text>
+
+  <!-- LLM Connector → Vertex AI (send chunks for embedding) -->
+  <line x1="520" y1="205" x2="620" y2="148" stroke="#f59e0b" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="555" y="165" font-size="9" fill="#fbbf24">chunks /</text>
+  <text x="555" y="176" font-size="9" fill="#fbbf24">query</text>
+
+  <!-- Vertex AI → LLM Connector (embeddings back) -->
+  <line x1="620" y1="165" x2="520" y2="225" stroke="#10b981" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ay)"/>
+  <text x="590" y="202" font-size="9" fill="#34d399">vectors</text>
+
+  <!-- LLM Connector → PostgreSQL (store / search) -->
+  <line x1="520" y1="260" x2="620" y2="278" stroke="#6366f1" stroke-width="2" marker-end="url(#ai)"/>
+  <text x="543" y="255" font-size="9" fill="#818cf8">store /</text>
+  <text x="543" y="266" font-size="9" fill="#818cf8">search</text>
+
+  <!-- PostgreSQL → LLM Connector (top-K results) -->
+  <line x1="620" y1="300" x2="520" y2="368" stroke="#6366f1" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ay)"/>
+  <text x="560" y="345" font-size="9" fill="#818cf8">top-K</text>
+
+  <!-- LLM Connector → Gemini (RAG prompt) -->
+  <line x1="520" y1="412" x2="620" y2="422" stroke="#f59e0b" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="543" y="408" font-size="9" fill="#fbbf24">RAG prompt</text>
+
+  <!-- Gemini → LLM Connector (NLP answer) -->
+  <line x1="620" y1="440" x2="520" y2="430" stroke="#10b981" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ay)"/>
+  <text x="543" y="452" font-size="9" fill="#34d399">NLP answer</text>
+
+  <!-- LLM Connector → Custom UI (results + summary) -->
+  <line x1="220" y1="415" x2="160" y2="410" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#ap)"/>
+  <text x="163" y="402" font-size="9" fill="#c4b5fd">results +</text>
+  <text x="163" y="413" font-size="9" fill="#c4b5fd">summary</text>
+
+  <!-- ══════════════════════════════════════════════
+       FOOTER LEGEND
+  ══════════════════════════════════════════════ -->
+  <rect x="30" y="498" width="840" height="68" rx="8" fill="#111827" stroke="#1e293b" stroke-width="1.5"/>
+  <text x="450" y="516" text-anchor="middle" font-size="11" font-weight="bold" fill="#94a3b8">Arrow Key</text>
+  <rect x="50"  y="526" width="10" height="3" fill="#3b82f6"/>
+  <text x="66"  y="531" font-size="9" fill="#94a3b8">CM → Connector (docs)</text>
+  <rect x="210" y="526" width="10" height="3" fill="#f59e0b"/>
+  <text x="226" y="531" font-size="9" fill="#94a3b8">Connector → Vertex / Gemini (request)</text>
+  <rect x="490" y="526" width="10" height="3" fill="#10b981"/>
+  <text x="506" y="531" font-size="9" fill="#94a3b8">Vertex / Gemini → Connector (response, dashed)</text>
+  <rect x="730" y="526" width="10" height="3" fill="#6366f1"/>
+  <text x="746" y="531" font-size="9" fill="#94a3b8">Connector ↔ PostgreSQL</text>
+
+  <rect x="50"  y="546" width="10" height="3" fill="#8b5cf6"/>
+  <text x="66"  y="551" font-size="9" fill="#94a3b8">UI → Connector (query) / Connector → UI (results, dashed)</text>
+  <text x="450" y="557" text-anchor="middle" font-size="8" fill="#475569">Solid = request  ·  Dashed = response</text>
+</svg>

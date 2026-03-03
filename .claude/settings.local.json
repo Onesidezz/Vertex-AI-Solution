@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command:*)",
+      "Bash(python:*)",
+      "WebSearch",
+      "Bash(dotnet build:*)",
+      "Bash(Select-String -Pattern \"error CS\")",
+      "Bash(psql:*)",
+      "Bash(where:*)"
+    ]
+  }
+}

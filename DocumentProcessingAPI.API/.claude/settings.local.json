@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet ef database update:*)",
+      "Bash(dotnet ef dbcontext info:*)",
+      "Bash(dotnet ef migrations:*)",
+      "Bash(dotnet build:*)",
+      "Bash(pip install:*)",
+      "Bash(python create_demo_ppt.py:*)",
+      "Bash(python:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

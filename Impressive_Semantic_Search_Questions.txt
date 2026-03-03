@@ -1,0 +1,148 @@
+===============================================================================
+IMPRESSIVE SEMANTIC SEARCH QUESTIONS FOR RAG-POWERED DEMO
+Document Processing API - Showcase Questions
+===============================================================================
+
+Based on actual documents:
+- Invoice: Kessler LLC to Corkery Group (INV-000100)
+- Resume: Ajith S - Documentum/ECM Consultant
+- Book: Game of Thrones - Battle of Riverrun scene
+
+Each category has 3 questions: 1 BASIC + 2 JAW-DROPPING
+
+===============================================================================
+CATEGORY 1: INVOICE QUERIES (Financial Documents)
+===============================================================================
+
+BASIC:
+1. "Show me invoices with pending or unpaid amounts"
+   - Expected: Invoice INV-000100 (pending $13,998.53 out of $22,583.32)
+   - Shows: Financial status understanding and payment tracking
+
+JAW-DROPPING:
+2. "Find invoices from South Carolina vendors to Rhode Island customers where we've paid less than 40% of the total amount"
+   - Expected: Kessler LLC (SC) to Corkery Group (RI), paid 38% ($8,584/$22,583)
+   - Shows: Multi-state geography + payment percentage calculation + vendor-customer relationship
+
+3. "Show me unpaid invoices over $20,000 from the southeastern US that include furniture purchases and are due in December 2025"
+   - Expected: Kessler LLC invoice ($22,583, SC, Rustic Cotton Chair, due 12/3/2025, $13,998 unpaid)
+   - Shows: Amount threshold + geography + product category + temporal + payment status combined
+
+===============================================================================
+CATEGORY 2: RESUME QUERIES (HR & Recruitment)
+===============================================================================
+
+BASIC:
+4. "Find candidates with Documentum or ECM experience"
+   - Expected: Ajith S (3.6 years ECM, Documentum D2, CARA, Administrator)
+   - Shows: Direct technical skill matching
+
+JAW-DROPPING:
+5. "I need someone who can automate document workflows for a German pharmaceutical company and has worked with deviation management - who fits?"
+   - Expected: Ajith S (Merck Germany + Deviation Management + ECM automation + custom jobs)
+   - Shows: Client geography + industry domain + specific compliance experience + automation skills
+
+6. "Find AWS-certified developers who have built monitoring systems and worked on European pharmaceutical compliance projects"
+   - Expected: Ajith S (AWS Certified + monitoring system + Merck Germany + deviation/RCA)
+   - Shows: Certification + technical capability + geography + regulated industry expertise
+
+===============================================================================
+CATEGORY 3: LITERARY CONTENT (Game of Thrones)
+===============================================================================
+
+BASIC:
+7. "What are Jaime Lannister's personality weaknesses?"
+   - Expected: Restless, quick to anger, impatient, lacks patience
+   - Shows: Character personality extraction and trait identification
+
+JAW-DROPPING:
+8. "Explain why an outnumbered army might still win this battle based on their strategic advantages"
+   - Expected: Element of surprise, enemy unaware, Jaime's impatience, divided camps by rivers
+   - Shows: Strategic reasoning, tactical analysis, cause-effect understanding
+
+9. "Describe the emotional conflict a mother feels watching her teenage son prepare to lead men into a deadly battle"
+   - Expected: Catelyn's fear, protective instinct, seeing baby vs grown man, praying for survival
+   - Shows: Emotional intelligence, sentiment analysis, parent-child dynamics
+
+===============================================================================
+CATEGORY 4: CROSS-DOCUMENT INTELLIGENCE
+===============================================================================
+
+BASIC:
+10. "Find all documents mentioning large financial amounts or large numbers"
+    - Expected: Invoice ($22,583), Battle (12,000 soldiers, 6,000 troops)
+    - Shows: Quantitative pattern recognition across document types
+
+JAW-DROPPING:
+11. "Show me examples where someone is facing unfavorable odds but using intelligence or strategy to overcome them"
+    - Expected: Robb (outnumbered 3:1, using surprise/intelligence), Invoice (large debt, need payment strategy)
+    - Shows: Abstract concept mapping (challenge + strategic response) across contexts
+
+12. "Find records where timing is absolutely critical to success and delay could mean failure"
+    - Expected: Invoice due date (payment deadline), Battle timing (must arrive before enemy knows)
+    - Shows: Temporal urgency and consequence understanding across domains
+
+===============================================================================
+CATEGORY 5: SHOCKING "WOW" QUESTIONS
+===============================================================================
+
+BASIC:
+13. "Find someone who has experience with root cause analysis"
+    - Expected: Ajith S (RCA, Impact Analysis, Preventive/Corrective actions)
+    - Shows: Methodology and process understanding
+
+JAW-DROPPING:
+14. "I need to hire someone for a DevOps role supporting pharmaceutical document management in Europe who can build automation and handle compliance - give me the best match"
+    - Expected: Ajith S (DevOps: monitoring/servers + Pharma: Merck/Life Science + Europe: Germany + ECM: Documentum + Automation: custom jobs + Compliance: deviation management)
+    - Shows: 6-dimensional matching (role + industry + geography + domain + technical + compliance)
+
+15. "Compare situations where a young leader takes calculated risks despite parental concern versus a consultant automating workflows to reduce team risk"
+    - Expected: Robb (15, leading army, Catelyn worried) vs Ajith (automated user management, reduced support team effort/risk)
+    - Shows: Thematic parallels across completely different contexts (leadership + risk + concern)
+
+===============================================================================
+DEMO PRESENTATION FLOW
+===============================================================================
+
+START SIMPLE (Basic Questions 1, 4, 7, 10, 13):
+- Build confidence with straightforward semantic queries
+- Show the system understands business concepts
+
+ESCALATE COMPLEXITY (Jaw-dropping Questions 2-3, 5-6, 8-9, 11-12):
+- Demonstrate multi-criteria matching
+- Show cross-document intelligence
+
+DELIVER SHOCK (Questions 14-15):
+- Mind-blowing 6-dimensional matching
+- Abstract thematic comparison across document types
+- Impossible with traditional keyword search
+
+===============================================================================
+WHY THESE QUESTIONS WILL SHOCK EVERYONE
+===============================================================================
+
+TRADITIONAL KEYWORD SEARCH COMPLETELY FAILS:
+❌ "SC to RI vendors paid less than 40%" → Can't calculate percentages or combine geography
+❌ "$20K+ southeastern furniture December unpaid" → Can't combine 5 different criteria
+❌ "DevOps pharmaceutical Europe compliance" → Can't match 6 different criteria
+❌ "Young leader with parental concern" → Can't understand abstract concepts
+
+SEMANTIC RAG SUCCEEDS BRILLIANTLY:
+✓ Calculates payment percentages (38% paid)
+✓ Understands geographic regions (southeastern = South Carolina)
+✓ Recognizes product categories (chair = furniture)
+✓ Combines amount + location + date + status + category seamlessly
+✓ Matches skills + domain + geography + role + compliance simultaneously
+✓ Recognizes thematic parallels (risk, leadership, concern) across contexts
+✓ Provides decision support, not just data retrieval
+
+BUSINESS VALUE:
+→ Hire the perfect candidate in seconds vs days of resume screening
+→ Identify payment priorities with surgical precision
+→ Extract insights from any content type (invoices, resumes, books, contracts)
+→ Natural language queries - no training needed
+→ Works across ALL document types in your organization
+
+===============================================================================
+END OF SEMANTIC SEARCH QUESTIONS - 15 TOTAL
+===============================================================================

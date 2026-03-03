@@ -2,14 +2,16 @@
 using Google.Cloud.AIPlatform.V1;
 using Google.Apis.Auth.OAuth2;
 using Grpc.Auth;
+using Grpc.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace DocumentProcessingAPI.Infrastructure.Services;
 
 /// <summary>
-/// Google Vertex AI embedding service using text-embedding-005
+/// Google Vertex AI embedding service using gemini-embedding-001
 /// Provides high-quality embeddings via Vertex AI SDK
+/// Includes retry logic with exponential backoff for quota management
 /// </summary>
 public class GeminiEmbeddingService : IEmbeddingService
 {
@@ -20,6 +22,11 @@ public class GeminiEmbeddingService : IEmbeddingService
     private readonly string _location;
     private readonly string _embeddingModel;
     private readonly PredictionServiceClient _predictionClient;
+
+    // Retry configuration
+    private const int MaxRetries = 5;
+    private const int InitialRetryDelayMs = 2000; // 2 seconds
+    private const int MaxRetryDelayMs = 60000; // 60 seconds max
 
     public GeminiEmbeddingService(ILogger<GeminiEmbeddingService> logger, IConfiguration configuration)
     {
@@ -81,82 +88,108 @@ public class GeminiEmbeddingService : IEmbeddingService
             return new float[_embeddingDimension];
         }
 
-        try
+        int retryCount = 0;
+        int delayMs = InitialRetryDelayMs;
+
+        while (true)
         {
-            _logger.LogInformation("🔄 Generating Vertex AI embedding for text (length: {Length})", text.Length);
-
-            // Build the endpoint name
-            var endpoint = EndpointName.FromProjectLocationPublisherModel(
-                _projectId,
-                _location,
-                "google",
-                _embeddingModel
-            );
-
-            // Create the prediction request
-            var instance = new Google.Protobuf.WellKnownTypes.Value
+            try
             {
-                StructValue = new Google.Protobuf.WellKnownTypes.Struct
+                _logger.LogInformation("🔄 Generating Vertex AI embedding for text (length: {Length})", text.Length);
+
+                // Build the endpoint name
+                var endpoint = EndpointName.FromProjectLocationPublisherModel(
+                    _projectId,
+                    _location,
+                    "google",
+                    _embeddingModel
+                );
+
+                // Create the prediction request
+                var instance = new Google.Protobuf.WellKnownTypes.Value
                 {
-                    Fields =
+                    StructValue = new Google.Protobuf.WellKnownTypes.Struct
                     {
-                        ["content"] = Google.Protobuf.WellKnownTypes.Value.ForString(text)
+                        Fields =
+                        {
+                            ["content"] = Google.Protobuf.WellKnownTypes.Value.ForString(text)
+                        }
                     }
-                }
-            };
+                };
 
-            var parameters = new Google.Protobuf.WellKnownTypes.Value
-            {
-                StructValue = new Google.Protobuf.WellKnownTypes.Struct
+                var parameters = new Google.Protobuf.WellKnownTypes.Value
                 {
-                    Fields =
+                    StructValue = new Google.Protobuf.WellKnownTypes.Struct
                     {
-                        ["outputDimensionality"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(_embeddingDimension)
+                        Fields =
+                        {
+                            ["outputDimensionality"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(_embeddingDimension)
+                        }
                     }
+                };
+
+                var request = new PredictRequest
+                {
+                    EndpointAsEndpointName = endpoint,
+                    Instances = { instance },
+                    Parameters = parameters
+                };
+
+                // Call Vertex AI
+                var response = await _predictionClient.PredictAsync(request);
+
+                if (response.Predictions.Count == 0)
+                {
+                    _logger.LogError("No predictions returned from Vertex AI");
+                    throw new InvalidOperationException("No embeddings returned from Vertex AI");
                 }
-            };
 
-            var request = new PredictRequest
-            {
-                EndpointAsEndpointName = endpoint,
-                Instances = { instance },
-                Parameters = parameters
-            };
+                // Extract embedding values
+                var prediction = response.Predictions[0];
+                var embeddingsField = prediction.StructValue.Fields["embeddings"];
+                var valuesField = embeddingsField.StructValue.Fields["values"];
 
-            // Call Vertex AI
-            var response = await _predictionClient.PredictAsync(request);
+                var embedding = valuesField.ListValue.Values
+                    .Select(v => (float)v.NumberValue)
+                    .ToArray();
 
-            if (response.Predictions.Count == 0)
-            {
-                _logger.LogError("No predictions returned from Vertex AI");
-                throw new InvalidOperationException("No embeddings returned from Vertex AI");
+                _logger.LogInformation("✅ Successfully generated Vertex AI embedding with {Dimensions} dimensions", embedding.Length);
+
+                // Validate dimensions
+                if (embedding.Length != _embeddingDimension)
+                {
+                    _logger.LogWarning("⚠️ Dimension mismatch! Expected: {Expected}, Got: {Actual}",
+                        _embeddingDimension, embedding.Length);
+                }
+
+                return embedding;
             }
-
-            // Extract embedding values
-            var prediction = response.Predictions[0];
-            var embeddingsField = prediction.StructValue.Fields["embeddings"];
-            var valuesField = embeddingsField.StructValue.Fields["values"];
-
-            var embedding = valuesField.ListValue.Values
-                .Select(v => (float)v.NumberValue)
-                .ToArray();
-
-            _logger.LogInformation("✅ Successfully generated Vertex AI embedding with {Dimensions} dimensions", embedding.Length);
-
-            // Validate dimensions
-            if (embedding.Length != _embeddingDimension)
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.ResourceExhausted && retryCount < MaxRetries)
             {
-                _logger.LogWarning("⚠️ Dimension mismatch! Expected: {Expected}, Got: {Actual}",
-                    _embeddingDimension, embedding.Length);
-            }
+                retryCount++;
+                _logger.LogWarning("⚠️ Quota exceeded (attempt {Attempt}/{MaxRetries}). Waiting {Delay}ms before retry...",
+                    retryCount, MaxRetries, delayMs);
 
-            return embedding;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to generate Vertex AI embedding for text: {Text}",
-                text.Length > 100 ? text.Substring(0, 100) + "..." : text);
-            throw;
+                await Task.Delay(delayMs);
+
+                // Exponential backoff with jitter
+                delayMs = Math.Min(delayMs * 2 + Random.Shared.Next(0, 1000), MaxRetryDelayMs);
+            }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable && retryCount < MaxRetries)
+            {
+                retryCount++;
+                _logger.LogWarning("⚠️ Service unavailable (attempt {Attempt}/{MaxRetries}). Waiting {Delay}ms before retry...",
+                    retryCount, MaxRetries, delayMs);
+
+                await Task.Delay(delayMs);
+                delayMs = Math.Min(delayMs * 2 + Random.Shared.Next(0, 1000), MaxRetryDelayMs);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to generate Vertex AI embedding for text: {Text}",
+                    text.Length > 100 ? text.Substring(0, 100) + "..." : text);
+                throw;
+            }
         }
     }
 

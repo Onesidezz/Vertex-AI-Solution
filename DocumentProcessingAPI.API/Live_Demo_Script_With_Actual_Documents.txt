@@ -1,0 +1,356 @@
+================================================================================
+UI DEMO SCRIPT - REAL-TIME SCENARIOS
+================================================================================
+
+INTRODUCTION
+============
+Now that we've covered the architecture and capabilities, let's see the Document Processing API in action. I'll demonstrate real-world scenarios using actual documents from our Content Manager system.
+
+For this demo, I've prepared several document types that represent common enterprise use cases:
+- Employee profiles and HR documents
+- Resumes and candidate applications
+- Invoices and financial records
+- Contracts and legal documents
+- Technical documentation and manuals
+
+
+SCENARIO 1: DATA SYNCHRONIZATION - INITIAL LOAD
+================================================
+
+We have already synchronized some documents from Content Manager. The sync process has completed and all documents are now ready for semantic search.
+
+
+SCENARIO 2: SEMANTIC SEARCH - FINDING EMPLOYEE PROFILES
+========================================================
+
+Now that we have already synchronized some of the documents, let's explore the search capabilities.
+
+Imagine you're an HR manager looking for employees with specific skills. Let me demonstrate semantic search versus traditional keyword search.
+
+Traditional Search Query:
+[Type: "software engineer"]
+[Set Search Mode: Keyword Only]
+[Click Search]
+
+You can see we get results, but they're based purely on exact keyword matches. The results contain the words "software" and "engineer" but may miss relevant candidates.
+
+Now, let's try semantic search:
+[Type: "developers who have experience building cloud-native applications"]
+[Set Search Mode: Semantic]
+[Click Search]
+
+Look at the difference! Even though our query uses different words, the semantic search understands the intent and meaning:
+- It found profiles mentioning "software engineers" even though we said "developers"
+- It matched people with "AWS experience" and "containerization" skills because it understands these relate to "cloud-native"
+
+[Click on a result to expand]
+
+Notice each result shows:
+- Relevance score: How well it matches your query
+
+**IMPORTANT FEATURE - Chat with Document:**
+Whenever we get the result, we can chat with the particular document and get a small summary by clicking the right side buttons. This allows you to:
+- Get instant AI-generated summaries
+- Ask follow-up questions about specific documents
+- Extract key information without reading the entire file
+
+
+SCENARIO 3: RAG-POWERED Q&A - RESUME SCREENING
+===============================================
+
+Let's move to something more advanced - using RAG to answer questions about candidates.
+
+[Navigate to RAG Search page]
+
+Suppose I'm screening candidates for a senior position and need specific information.
+
+Query 1: "Which candidates have leadership experience managing teams"
+
+[Type query and click Generate Answer or Ask AI]
+
+[Point to the generated answer]
+
+The answer provides:
+- A direct response to the question
+- Specific names and details from resumes
+- Source citations showing which documents were used
+- Confidence in the answer based on available information
+
+[Scroll to source documents section]
+
+Here you can see the exact document for specific intention of the user. You can click on any source document to verify the information or dive deeper into the details.
+
+
+SCENARIO 4: INVOICE SEARCH - FINANCIAL DOCUMENT RETRIEVAL
+==========================================================
+
+Let's switch to a finance use case. Imagine the accounting team needs to find specific invoices.
+
+[Type: "Find all invoices from invoice fly"]
+[Set Search Mode: Hybrid]
+[Click Search]
+
+[Results show the invoice from Global Enterprises LLC created using InvoiceFly]
+
+Now, let's use the powerful Ask AI feature:
+
+[Click "Ask AI" button on the invoice result]
+
+Ask AI Query: "Are all invoice calculations consistent?"
+
+[Watch as AI analyzes the invoice]
+
+The AI will verify:
+- Subtotals and line item calculations
+- Discount applications
+- Tax calculations (8.75% rate)
+- Shipping charges
+- Final total accuracy
+
+This automated verification saves hours of manual checking and reduces human error!
+
+
+SCENARIO 5: TECHNICAL DOCUMENTATION SEARCH
+===========================================
+
+Let's try a technical support scenario.
+
+Query 1: "How do I configure SSL certificates for the web server?"
+[Use RAG mode]
+
+[If technical documentation is available]
+The system synthesizes information from multiple technical documents - installation guides, configuration manuals, and troubleshooting docs - into one coherent answer.
+
+Query 2: "File Size limit in Content Manager"
+[Type and search]
+
+The AI will extract specific information about:
+- Default file size limits
+- Configuration settings
+- Administrator procedures
+- Best practices for large files
+
+
+SCENARIO 6: MULTI-DOCUMENT COMPARISON
+======================================
+
+Here's a powerful RAG use case - comparing information across documents.
+
+[Type: "Top 3 Resumes Profiles for content Manager"]
+[Use RAG mode]
+[Click Search or Ask AI]
+
+[Watch as the AI analyzes multiple resume documents]
+
+The AI will compare and provide:
+- Ranking of candidates based on relevant experience
+- Key skills and certifications for each
+- Years of experience comparison
+- Technology expertise breakdown
+- Recommended candidate with justification
+
+This would take hours manually but happens in seconds with RAG.
+
+
+SCENARIO 7: PROJECT MANAGEMENT DATA QUERIES
+============================================
+
+Let's query the Project Management Excel file to demonstrate structured data extraction.
+
+Query: "What is the progress of market research task?"
+
+[Type query and search]
+
+The AI will extract from the Project Management Excel:
+- Task: Market Research
+- Assigned to: Alice
+- Progress: 78% complete
+- Start Date: 2024-01-01
+- End Date: 2024-01-14
+- Days Required: 13 days
+
+This shows the system can intelligently extract structured data from Excel files and provide specific answers.
+
+
+SCENARIO 8: NO MODEL HALLUCINATION - GROUNDED RESPONSES
+========================================================
+
+**CRITICAL FEATURE: This application ONLY provides answers based on data we feed into it.**
+
+**There is NO concept of Model Hallucination here.**
+
+Let me demonstrate this important security and reliability feature:
+
+**Example 1: Question Outside Our Data Scope**
+
+Query: "Who is the CEO of OpenText?"
+
+[Type and search - BEFORE processing the Announcement.pdf]
+
+[Point to the response]
+
+Response: "I am sorry, but the provided records do not contain information about the CEO of OpenText. The records are training materials for Content Manager and focus on product usage."
+
+**This is exactly what we want!** The AI is being honest - it doesn't have that information yet, so it doesn't make up an answer.
+
+**Now, let's process one document that contains our CEO information:**
+
+[Demonstrate processing/syncing the Announcement.pdf document]
+
+Now the system has ingested data related to CEO information. Let's ask again:
+
+Query: "Who is the CEO of OpenText?"
+
+[Type and search - AFTER processing the Announcement.pdf]
+
+Response: "Ayman Antoun has been appointed as OpenText's CEO, effective April 20, 2026. He is a highly accomplished executive with more than three decades of global technology leadership experience, most recently serving as President of IBM Americas."
+
+**Key Point:** If we feed or ingest data related to a topic, the system will definitely give accurate answers. We can ingest:
+- HR Policies
+- Company Policies
+- Financial Reports
+- Technical Documentation
+- Any enterprise content
+
+**Handling Contradictory Information:**
+
+If we have policies from different years that contradict each other, the AI will be smart about it:
+
+Example Response: "As per the FY 2025 policies, the work-from-home policy allowed 3 days per week. However, in the latest 2026 policy documents, this has changed to a phased return-to-office approach: 4 days in-office starting March 2026, moving to 5 days by September 2026."
+
+The AI will cite the specific year and version, showing both policies and clarifying the timeline.
+
+
+SCENARIO 9: CONTEXT UNDERSTANDING - NOT JUST KEYWORD MATCHING
+==============================================================
+
+**This application is NOT just matching keywords - it understands the CONTEXT and USER INTENT behind the question.**
+
+Let me demonstrate:
+
+**Example 1: Understanding Intent**
+
+Query: "Find people who can help with content management implementation"
+
+The system understands:
+- "help with" = has skills/experience in
+- "content management" = Documentum, OpenText, ECM systems
+- "implementation" = project experience, not just theoretical knowledge
+
+Results: Consultants with actual implementation experience in D2, InfoArchive, Content Manager
+
+**Example 2: Semantic Relationships**
+
+Query: "Who worked with pharmaceutical companies?"
+
+The AI understands:
+- "pharmaceutical" = "Life Sciences" = "Healthcare" = "Biotech"
+- Finds: Ajith S who worked for Merck Germany (Life Science Customer)
+- Even though the resume says "Life Science" not "pharmaceutical"
+
+**Example 3: Understanding Numbers and Comparisons**
+
+Query: "Invoices over five thousand dollars"
+
+The AI understands:
+- "five thousand dollars" = $5,000 = 5000
+- "over" = greater than (>)
+- Finds invoice with $6,965.91 total
+
+**THIS APPLICATION WILL NOT GO OUT OF CONTEXT**
+
+The system is designed to:
+✓ Stay focused on the documents it has indexed
+✓ Not make up information it doesn't have
+✓ Ask for clarification if the query is ambiguous
+✓ Cite sources for every answer
+✓ Refuse to answer questions outside its knowledge base
+
+If you ask "What's the weather today?" it will respond:
+"I am sorry, but the provided records do not contain weather information. I can only answer questions based on the documents in Content Manager that have been processed."
+
+
+SCENARIO 10: AUDIT AND COMPLIANCE SEARCH
+=========================================
+
+[Additional compliance and audit-related searches can be demonstrated here based on available documents]
+
+Query examples:
+- "Show all company policies"
+- "Find documents related to security compliance"
+- "Extract key dates from announcements"
+
+
+ADDITIONAL DEMONSTRATION QUERIES
+=================================
+
+**For Resumes:**
+- "Find consultants with certifications"
+- "Who has experience in pharmaceutical industry?"
+- "Consultants located in specific regions"
+
+**For Invoices:**
+- "Invoices exceeding five thousand dollars"
+- "Find software license purchases"
+- "What is the total for cloud storage services?"
+
+**For Project Management:**
+- "Which projects are completed?"
+- "Show marketing projects and their status"
+- "Who is working on development tasks?"
+
+
+KEY FEATURES HIGHLIGHTED
+=========================
+
+✓ Semantic Search - Understanding intent beyond keywords, not just keyword matching
+✓ RAG-Powered Answers - Grounded in actual documents with citations
+✓ Chat with Documents - Interactive Q&A with individual files
+✓ Multi-Document Analysis - Compare and synthesize across files
+✓ Invoice Validation - Automated calculation verification
+✓ Cross-Format Support - PDFs, DOCX, XLSX all searchable
+✓ Real-Time Performance - Sub-second search results
+✓ NO Model Hallucination - Only answers from indexed documents, never makes up information
+✓ Context Understanding - Understands user intent, not just literal words
+✓ Stays Within Context - Refuses to answer questions outside its knowledge base
+✓ Handles Contradictions - Cites specific versions/years when policies differ
+✓ Structured Data Extraction - Intelligently extracts from Excel, tables, forms
+
+
+CONCLUSION
+==========
+
+This demonstration shows how Document Processing API with RAG-powered semantic search transforms enterprise document management:
+
+**Speed & Efficiency:**
+- Hours of manual document review → Seconds of AI-powered search
+- Manual data extraction → Automated structured data retrieval
+- Individual document reading → Multi-document synthesis and comparison
+
+**Intelligence & Understanding:**
+- Keyword-based searches → Intent-understanding semantic queries
+- Literal matching → Context-aware comprehension
+- Generic results → Personalized, relevant answers
+
+**Reliability & Trust:**
+- Model hallucination risk → Zero hallucination (grounded in actual documents)
+- Unverifiable answers → Every answer cites source documents
+- Out-of-context responses → Stays strictly within indexed knowledge base
+- Conflicting information → Clear version/date citations
+
+**Real Business Value:**
+- 90%+ time savings on document research
+- Reduced human error in calculations and data extraction
+- Improved compliance through better policy awareness
+- Enhanced decision-making with instant multi-document analysis
+
+**Critical Differentiator:**
+Unlike generic AI tools that can hallucinate or make up information, our system:
+✓ ONLY answers from YOUR documents
+✓ NEVER invents information
+✓ ALWAYS cites sources
+✓ REFUSES to answer outside its knowledge scope
+
+This makes it safe and reliable for enterprise use where accuracy is critical!
+
+Questions?

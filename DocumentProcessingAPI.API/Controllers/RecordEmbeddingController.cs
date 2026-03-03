@@ -1,5 +1,6 @@
 using DocumentProcessingAPI.Core.DTOs;
 using DocumentProcessingAPI.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DocumentProcessingAPI.API.Controllers
@@ -30,6 +31,7 @@ namespace DocumentProcessingAPI.API.Controllers
         /// </summary>
         /// <param name="searchString">TRIM search string (default: "*" for all records)</param>
         /// <returns>Number of records processed</returns>
+        //[AllowAnonymous] // Temporarily allow anonymous access for Postman testing
         [HttpPost("process-all")]
         public async Task<ActionResult<ProcessRecordsResponseDto>> ProcessAllRecords([FromQuery] string searchString = "*")
         {

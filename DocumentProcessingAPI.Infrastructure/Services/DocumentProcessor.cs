@@ -938,46 +938,126 @@ public class DocumentProcessor : IDocumentProcessor
             return text;
 
         var result = new StringBuilder();
-        bool lastWasLetter = false;
-        bool lastWasDigit = false;
+        bool lastWasLetter  = false;
+        bool lastWasDigit   = false;
+        bool lastWasUpper   = false;
 
         for (int i = 0; i < text.Length; i++)
         {
             char current = text[i];
 
-            // Add space before uppercase letters that follow lowercase letters or digits
+            // Add space before uppercase letters that follow lowercase letters or digits.
+            // Do NOT add a space if we are inside an acronym — detected by checking BOTH
+            // the previous character (was it uppercase?) AND the next character (is it uppercase?).
+            // This correctly handles: "OpenText" (split), "IBM" (no split), "CEO" (no split).
             if (char.IsUpper(current) && (lastWasLetter || lastWasDigit) &&
                 result.Length > 0 && result[result.Length - 1] != ' ' && result[result.Length - 1] != '\n')
             {
-                // Check if this might be an acronym (multiple consecutive uppercase letters)
-                bool isAcronym = i + 1 < text.Length && char.IsUpper(text[i + 1]);
+                bool prevWasUpper = lastWasUpper;
+                bool nextIsUpper  = i + 1 < text.Length && char.IsUpper(text[i + 1]);
+
+                // Skip space insertion when we are continuing or ending an acronym
+                bool isAcronym = prevWasUpper || nextIsUpper;
                 if (!isAcronym)
                 {
                     result.Append(' ');
                 }
             }
 
-            // Add space before digits that follow letters
-            else if (char.IsDigit(current) && lastWasLetter &&
-                     result.Length > 0 && result[result.Length - 1] != ' ' && result[result.Length - 1] != '\n')
-            {
-                result.Append(' ');
-            }
-
-            // Add space before letters that follow digits
-            else if (char.IsLetter(current) && lastWasDigit &&
-                     result.Length > 0 && result[result.Length - 1] != ' ' && result[result.Length - 1] != '\n')
-            {
-                result.Append(' ');
-            }
-
             result.Append(current);
 
+            lastWasUpper  = char.IsUpper(current);
             lastWasLetter = char.IsLetter(current);
-            lastWasDigit = char.IsDigit(current);
+            lastWasDigit  = char.IsDigit(current);
         }
 
         return result.ToString();
+    }
+
+    /// <summary>
+    /// Targeted post-processing corrections for PDF extraction artefacts that survive
+    /// the CleanOcrNoise → ReconstructText → FixTextSpacing pipeline.
+    ///
+    /// Three classes of issue are addressed:
+    ///   1. Uppercase acronym fragments joined by a stray space after glyph-level
+    ///      line-splitting  (e.g. "CE O" → "CEO", "IB M" → "IBM").
+    ///      These arise when individual glyphs have baseline Y coordinates that
+    ///      differ by more than the FontAware merge threshold (now 4pt, was 2pt).
+    ///      The enumerated patterns here provide an extra safety net for any that
+    ///      still slip through.
+    ///
+    ///   2. CamelCase brand / product names that FixTextSpacing incorrectly splits
+    ///      (e.g. "Open Text" → "OpenText", "Mc Gourlay" → "McGourlay").
+    ///      FixTextSpacing must insert spaces at CamelCase transitions for normal
+    ///      prose (e.g. "ThisMethod" → "This Method"), so it cannot distinguish
+    ///      brand names.  We restore them here.  Add to the list as new names
+    ///      appear in the document corpus.
+    ///
+    ///   3. Missing inter-word spaces where the PDF content stream omits the gap
+    ///      between adjacent words ("anda" = "and" + "a").  We only correct tokens
+    ///      that appear as standalone words (full \b…\b match) so that real words
+    ///      containing the same substring (e.g. "miranda") are never touched.
+    /// </summary>
+    private string NormalizeExtractedText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        // ── 1. Known uppercase acronym fragments ──────────────────────────────
+        // Enumerated explicitly (rather than a broad regex) to avoid accidentally
+        // merging legitimate two-word phrases that happen to be all-caps.
+        var acronymFixes = new (string Pattern, string Replacement)[]
+        {
+            (@"\bCE\s+O\b",  "CEO"),   // CEO most common split in C-suite titles
+            (@"\bCF\s+O\b",  "CFO"),
+            (@"\bCT\s+O\b",  "CTO"),
+            (@"\bCO\s+O\b",  "COO"),
+            (@"\bCH\s+O\b",  "CHO"),
+            (@"\bCS\s+O\b",  "CSO"),
+            (@"\bIB\s+M\b",  "IBM"),
+            (@"\bER\s+P\b",  "ERP"),
+            (@"\bCR\s+M\b",  "CRM"),
+            (@"\bHR\s+M\b",  "HRM"),
+            (@"\bSA\s+P\b",  "SAP"),
+        };
+        foreach (var (pattern, replacement) in acronymFixes)
+            text = Regex.Replace(text, pattern, replacement, RegexOptions.IgnoreCase);
+
+        // Financial year / quarter shorthands split by a stray space:
+        //   "FY 26" → "FY26",  "Q 3" → "Q3",  "H 1" → "H1"
+        text = Regex.Replace(text, @"\b(FY|FQ|Q[1-4]?|H[12])\s+(\d{1,4})\b", "$1$2");
+
+        // ── 2. Brand / organisation name corrections ──────────────────────────
+        var brandFixes = new (string Wrong, string Right)[]
+        {
+            ("Open Text",    "OpenText"),
+            ("Mc Gourlay",   "McGourlay"),
+            ("Mc Kinsey",    "McKinsey"),
+            ("Mc Donald",    "McDonald"),
+            ("De Loitte",    "Deloitte"),
+            ("Ac centure",   "Accenture"),
+            // Add further brand names encountered in the document corpus here.
+        };
+        foreach (var (wrong, right) in brandFixes)
+            text = Regex.Replace(text, @"\b" + Regex.Escape(wrong) + @"\b", right,
+                RegexOptions.IgnoreCase);
+
+        // ── 3. Missing inter-word spaces (standalone fused tokens only) ───────
+        // Using \b…\b guarantees we only split the token when it stands alone as
+        // a whole word — "miranda" is NOT matched because "anda" is not at a \b.
+        // Not using IgnoreCase so that capitalised proper nouns (e.g. "Anda") are
+        // left untouched.
+        var wordFusions = new (string Pattern, string Replacement)[]
+        {
+            (@"\banda\b",  "and a"),    // "and a" fused
+            (@"\boran\b",  "or an"),    // "or an" fused
+            (@"\bwitha\b", "with a"),   // "with a" fused
+            (@"\bofa\b",   "of a"),     // "of a" fused
+            (@"\bina\b",   "in a"),     // "in a" fused — rare but observed
+        };
+        foreach (var (pattern, replacement) in wordFusions)
+            text = Regex.Replace(text, pattern, replacement);
+
+        return text;
     }
 
     /// <summary>
@@ -1012,8 +1092,29 @@ public class DocumentProcessor : IDocumentProcessor
                 bestText = locationText;
             }
 
-            _logger.LogDebug("Page {PageNum}: Simple={SimpleScore}, Location={LocationScore}, Selected={MaxScore}",
-                pageNum, simpleScore, locationScore, maxScore);
+            // Strategy 3: Font-aware extraction — detects bold/large text and tags it as [HEADING].
+            // This catches headings that Strategy 1/2 skip because they use a separately-named
+            // embedded font (e.g. Arial-BoldMT, Calibri-Bold) or live in a header XObject.
+            var fontAwareStrategy = new FontAwareTextExtractionStrategy();
+            var fontAwareText = PdfTextExtractor.GetTextFromPage(page, fontAwareStrategy);
+            var fontAwareScore = CalculateTextQuality(fontAwareText);
+
+            // Prefer font-aware result when it scores at least as well, because it preserves
+            // heading markers that improve RAG chunking quality.
+            if (fontAwareScore >= maxScore && !string.IsNullOrWhiteSpace(fontAwareText))
+            {
+                maxScore = fontAwareScore;
+                bestText = fontAwareText;
+            }
+            else if (!string.IsNullOrWhiteSpace(fontAwareText))
+            {
+                // Even if font-aware didn't win overall, merge any [HEADING] lines it found
+                // that are missing from the best result so headings are never silently dropped.
+                bestText = MergeHeadingsIntoText(bestText, fontAwareText);
+            }
+
+            _logger.LogDebug("Page {PageNum}: Simple={SimpleScore}, Location={LocationScore}, FontAware={FontAwareScore}, Selected={MaxScore}",
+                pageNum, simpleScore, locationScore, fontAwareScore, maxScore);
         }
         catch (Exception ex)
         {
@@ -1022,6 +1123,37 @@ public class DocumentProcessor : IDocumentProcessor
         }
 
         return bestText ?? "";
+    }
+
+    /// <summary>
+    /// Merges [HEADING] lines found by the font-aware strategy into the base text.
+    /// Inserts any heading that is not already present so bold keywords are never lost.
+    /// </summary>
+    private string MergeHeadingsIntoText(string baseText, string fontAwareText)
+    {
+        var headingLines = fontAwareText
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(l => l.TrimStart().StartsWith("[HEADING]"))
+            .Select(l => l.Trim())
+            .ToList();
+
+        if (headingLines.Count == 0)
+            return baseText;
+
+        var merged = new StringBuilder(baseText);
+        foreach (var heading in headingLines)
+        {
+            // Extract the plain text part after [HEADING]
+            var headingContent = heading.Replace("[HEADING]", "").Trim();
+            // Only inject if neither the tagged nor untagged version exists already
+            if (!baseText.Contains(headingContent, StringComparison.OrdinalIgnoreCase) &&
+                !baseText.Contains(heading, StringComparison.OrdinalIgnoreCase))
+            {
+                merged.Insert(0, heading + Environment.NewLine);
+            }
+        }
+
+        return merged.ToString();
     }
 
     /// <summary>
@@ -1605,8 +1737,13 @@ public class DocumentProcessor : IDocumentProcessor
         // Apply intelligent text reconstruction
         text = ReconstructText(text);
 
-        // Final cleanup
+        // Fix CamelCase / acronym spacing
         text = FixTextSpacing(text);
+
+        // Correct known artefacts that survive the above steps:
+        // acronym fragments with stray spaces, brand names split by FixTextSpacing,
+        // and missing inter-word gaps in the original PDF stream.
+        text = NormalizeExtractedText(text);
 
         return text;
     }
